@@ -1,15 +1,111 @@
-# coco-cashu-plugin-npc
+### coco-cashu-plugin-npc
 
-To install dependencies:
+NPC plugin for coco-cashu-core. It bridges an NPubCash (NPC) server into the coco lifecycle by polling for newly paid quotes, converting them to `MintQuote`s, and feeding them to the core `mintQuoteService`.
+
+- **Polls NPC for paid quotes** since a persisted timestamp
+- **Groups by `mintUrl`** and forwards via `mintQuoteService.addExistingMintQuotes`
+- **Configurable polling** interval, lifecycle cleanup on shutdown
+
+#### Installation
+
+Install the plugin and its peer dependencies in your app:
 
 ```bash
-bun install
+# npm
+npm install coco-cashu-plugin-npc coco-cashu-core@^1.0.0-rc6
 ```
 
-To run:
+This package uses [`npubcash-sdk`](https://www.npmjs.com/package/npubcash-sdk) under the hood for NPC API access and JWT auth.
 
-```bash
-bun run ./src/index.ts
+#### Quick start
+
+```ts
+import { NPCPlugin } from "coco-cashu-plugin-npc";
+import type { Logger } from "coco-cashu-core";
+
+// Required: persist the last processed NPC paid timestamp (ms)
+let lastSince = 0;
+const sinceGetter = async () => lastSince;
+const sinceSetter = async (since: number) => {
+  lastSince = since;
+};
+
+// Provide a signer supported by npubcash-sdk's JWTAuthProvider
+// See npubcash-sdk docs for signer options
+const signer: any = /* your signer */ {};
+
+const baseUrl = "https://npc.example.com";
+const logger: Logger | undefined = undefined; // optional
+
+const plugin = new NPCPlugin(
+  baseUrl,
+  signer,
+  sinceGetter,
+  sinceSetter,
+  logger,
+  25_000 // optional poll interval ms (default 25s)
+);
+
+// Register with coco-cashu-core (pseudo-code)
+// core.use(plugin);
 ```
 
-This project was created using `bun init` in bun v1.2.18. [Bun](https://bun.sh) is a fast all-in-one JavaScript runtime.
+The core will call `onInit`, at which point the plugin starts polling. When the core shuts down, the plugin cleans up its timer via `registerCleanup`.
+
+#### How it works
+
+On each poll cycle the plugin:
+
+- Loads the last processed timestamp via `sinceGetter`
+- Calls the NPC server for paid quotes since that timestamp
+- Groups by `mintUrl` and forwards to `mintQuoteService.addExistingMintQuotes(mintUrl, quotes)`
+- Persists the latest `paidAt` back via `sinceSetter`
+
+#### API
+
+```ts
+class NPCPlugin {
+  constructor(
+    baseUrl: string,
+    signer: any,
+    sinceGetter: () => Promise<number>,
+    sinceSetter: (since: number) => Promise<void>,
+    logger?: Logger,
+    pollIntervalMs = 25_000
+  );
+
+  // Called by the core to start polling and register cleanup
+  onInit(ctx: PluginContext<["mintQuoteService"]>): void | Promise<void>;
+
+  // Metadata required by coco-cashu-core
+  readonly name: "npubcashPlugin";
+  readonly required: ["mintQuoteService"];
+}
+```
+
+- **`baseUrl`**: NPC server base URL, e.g. `https://npc.example.com`
+- **`signer`**: Signer instance compatible with `npubcash-sdk` `JWTAuthProvider`
+- **`sinceGetter`**: Async getter returning last processed NPC `paidAt`
+- **`sinceSetter`**: Async setter to persist the latest processed `paidAt`
+- **`logger`**: Optional logger (child loggers are derived if supported)
+- **`pollIntervalMs`**: Polling interval in milliseconds (default 25_000)
+
+Required service from the host core:
+
+- **`mintQuoteService`**: must provide `addExistingMintQuotes(mintUrl, quotes)`
+
+#### Notes
+
+- A reentrancy guard prevents overlapping polls; slow requests won’t stack.
+- Be sure to persist `since` durably (e.g., DB) for correct resume behavior.
+- Errors during polling are logged through the provided `logger` if available.
+
+#### Development
+
+This is a TypeScript library. The public surface is exported from `src/index.ts`:
+
+```ts
+export * from "./NPCPlugin";
+```
+
+Run type checks or builds using your project’s toolchain (e.g., `tsc`, `tsdown`).
