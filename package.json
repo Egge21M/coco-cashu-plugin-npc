@@ -1,0 +1,16 @@
+{
+  "name": "coco-cashu-plugin-npc",
+  "module": "./src/index.ts",
+  "type": "module",
+  "devDependencies": {
+    "@types/bun": "latest",
+    "tsdown": "^0.15.1"
+  },
+  "peerDependencies": {
+    "coco-cashu-core": "^1.0.0-rc6",
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "npubcash-sdk": "^0.1.4"
+  }
+}
