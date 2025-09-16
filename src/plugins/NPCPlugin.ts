@@ -1,6 +1,8 @@
 import type { Logger, Plugin, PluginContext } from "coco-cashu-core";
 import { JWTAuthProvider, NPCClient } from "npubcash-sdk";
 import { syncPaidQuotesOnce } from "../sync/syncPaidQuotes";
+import type { SinceStore } from "../sync/sinceStore";
+import { MemorySinceStore } from "../sync/sinceStore";
 
 const requiredServices = ["mintQuoteService"] as const;
 
@@ -8,8 +10,7 @@ export class NPCPlugin implements Plugin<typeof requiredServices> {
   readonly name = "npubcashPlugin";
   readonly required = requiredServices;
   private npcClient: NPCClient;
-  private sinceGetter: () => Promise<number>;
-  private sinceSetter: (since: number) => Promise<void>;
+  private sinceStore: SinceStore;
   private logger?: Logger;
   private pollIntervalMs: number;
   private pollTimer?: ReturnType<typeof setInterval>;
@@ -20,13 +21,11 @@ export class NPCPlugin implements Plugin<typeof requiredServices> {
   constructor(
     baseUrl: string,
     signer: any,
-    sinceGetter: () => Promise<number>,
-    sinceSetter: (since: number) => Promise<void>,
+    sinceStore?: SinceStore,
     logger?: Logger,
     pollIntervalMs = 25000
   ) {
-    this.sinceGetter = sinceGetter;
-    this.sinceSetter = sinceSetter;
+    this.sinceStore = sinceStore ?? new MemorySinceStore(0);
     this.logger =
       logger && (logger as any).child
         ? (logger as any).child({ module: "NPCPlugin" })
@@ -65,8 +64,7 @@ export class NPCPlugin implements Plugin<typeof requiredServices> {
       try {
         await syncPaidQuotesOnce({
           npcClient: this.npcClient,
-          sinceGetter: this.sinceGetter,
-          sinceSetter: this.sinceSetter,
+          sinceStore: this.sinceStore,
           mintQuoteService: ctx.services.mintQuoteService,
           logger: this.logger,
         });

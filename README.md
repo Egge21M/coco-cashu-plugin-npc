@@ -20,15 +20,11 @@ This package uses [`npubcash-sdk`](https://www.npmjs.com/package/npubcash-sdk) u
 #### Quick start (interval-based)
 
 ```ts
-import { NPCPlugin } from "coco-cashu-plugin-npc";
+import { NPCPlugin, MemorySinceStore } from "coco-cashu-plugin-npc";
 import type { Logger } from "coco-cashu-core";
 
-// Required: persist the last processed NPC paid timestamp (ms)
-let lastSince = 0;
-const sinceGetter = async () => lastSince;
-const sinceSetter = async (since: number) => {
-  lastSince = since;
-};
+// Optional: pass your own SinceStore; defaults to in-memory if omitted
+const sinceStore = new MemorySinceStore(0);
 
 // Provide a signer supported by npubcash-sdk's JWTAuthProvider
 // See npubcash-sdk docs for signer options
@@ -40,8 +36,7 @@ const logger: Logger | undefined = undefined; // optional
 const plugin = new NPCPlugin(
   baseUrl,
   signer,
-  sinceGetter,
-  sinceSetter,
+  sinceStore, // optional; omit to use memory
   logger,
   25_000 // optional poll interval ms (default 25s)
 );
@@ -56,10 +51,10 @@ The core will call `onInit`, at which point the plugin starts polling. When the 
 
 On each poll cycle the plugin:
 
-- Loads the last processed timestamp via `sinceGetter`
+- Loads the last processed timestamp via `SinceStore.get()`
 - Calls the NPC server for paid quotes since that timestamp
 - Groups by `mintUrl` and forwards to `mintQuoteService.addExistingMintQuotes(mintUrl, quotes)`
-- Persists the latest `paidAt` back via `sinceSetter`
+- Persists the latest `paidAt` back via `SinceStore.set()`
 
 #### API
 
@@ -68,14 +63,15 @@ class NPCPlugin {
   constructor(
     baseUrl: string,
     signer: any,
-    sinceGetter: () => Promise<number>,
-    sinceSetter: (since: number) => Promise<void>,
+    sinceStore?: SinceStore,
     logger?: Logger,
     pollIntervalMs = 25_000
   );
 
   // Called by the core to start polling and register cleanup
   onInit(ctx: PluginContext<["mintQuoteService"]>): void | Promise<void>;
+  // Called when the host is fully ready; starts the interval
+  onReady(): void | Promise<void>;
 
   // Metadata required by coco-cashu-core
   readonly name: "npubcashPlugin";
@@ -85,8 +81,7 @@ class NPCPlugin {
 
 - **`baseUrl`**: NPC server base URL, e.g. `https://npc.example.com`
 - **`signer`**: Signer instance compatible with `npubcash-sdk` `JWTAuthProvider`
-- **`sinceGetter`**: Async getter returning last processed NPC `paidAt`
-- **`sinceSetter`**: Async setter to persist the latest processed `paidAt`
+- **`sinceStore`**: Optional store for last processed NPC `paidAt` (defaults to in-memory)
 - **`logger`**: Optional logger (child loggers are derived if supported)
 - **`pollIntervalMs`**: Polling interval in milliseconds (default 25_000)
 
@@ -107,6 +102,7 @@ This is a TypeScript library. The public surface is exported from `src/index.ts`
 ```ts
 export * from "./plugins/NPCPlugin";
 export * from "./plugins/NPCOnDemandPlugin";
+export * from "./sync/sinceStore";
 ```
 
 Run type checks or builds using your project’s toolchain (e.g., `tsc`, `tsdown`).
@@ -116,26 +112,15 @@ Run type checks or builds using your project’s toolchain (e.g., `tsc`, `tsdown
 If you prefer to control when syncing happens (e.g., on a cron job, webhook, or manual trigger), use `NPCOnDemandPlugin`. It exposes a `syncOnce()` method instead of running on an interval.
 
 ```ts
-import { NPCOnDemandPlugin } from "coco-cashu-plugin-npc";
+import { NPCOnDemandPlugin, MemorySinceStore } from "coco-cashu-plugin-npc";
 import type { Logger } from "coco-cashu-core";
-
-let lastSince = 0;
-const sinceGetter = async () => lastSince;
-const sinceSetter = async (since: number) => {
-  lastSince = since;
-};
 
 const baseUrl = "https://npc.example.com";
 const signer: any = /* your signer */ {};
 const logger: Logger | undefined = undefined; // optional
+const sinceStore = new MemorySinceStore(0); // optional; omit to use memory
 
-const plugin = new NPCOnDemandPlugin(
-  baseUrl,
-  signer,
-  sinceGetter,
-  sinceSetter,
-  logger
-);
+const plugin = new NPCOnDemandPlugin(baseUrl, signer, sinceStore, logger);
 
 // Register with coco-cashu-core (pseudo-code)
 // core.use(plugin);
@@ -151,12 +136,12 @@ class NPCOnDemandPlugin {
   constructor(
     baseUrl: string,
     signer: any,
-    sinceGetter: () => Promise<number>,
-    sinceSetter: (since: number) => Promise<void>,
+    sinceStore?: SinceStore,
     logger?: Logger
   );
 
   onInit(ctx: PluginContext<["mintQuoteService"]>): void | Promise<void>;
+  onReady(): void | Promise<void>;
 
   // Triggers a single sync cycle
   syncOnce(): Promise<void>;
