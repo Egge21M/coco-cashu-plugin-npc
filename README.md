@@ -17,7 +17,7 @@ npm install coco-cashu-plugin-npc coco-cashu-core@^1.0.0-rc6
 
 This package uses [`npubcash-sdk`](https://www.npmjs.com/package/npubcash-sdk) under the hood for NPC API access and JWT auth.
 
-#### Quick start
+#### Quick start (interval-based)
 
 ```ts
 import { NPCPlugin } from "coco-cashu-plugin-npc";
@@ -105,7 +105,63 @@ Required service from the host core:
 This is a TypeScript library. The public surface is exported from `src/index.ts`:
 
 ```ts
-export * from "./NPCPlugin";
+export * from "./plugins/NPCPlugin";
+export * from "./plugins/NPCOnDemandPlugin";
 ```
 
 Run type checks or builds using your project’s toolchain (e.g., `tsc`, `tsdown`).
+
+#### On-demand variant (no interval)
+
+If you prefer to control when syncing happens (e.g., on a cron job, webhook, or manual trigger), use `NPCOnDemandPlugin`. It exposes a `syncOnce()` method instead of running on an interval.
+
+```ts
+import { NPCOnDemandPlugin } from "coco-cashu-plugin-npc";
+import type { Logger } from "coco-cashu-core";
+
+let lastSince = 0;
+const sinceGetter = async () => lastSince;
+const sinceSetter = async (since: number) => {
+  lastSince = since;
+};
+
+const baseUrl = "https://npc.example.com";
+const signer: any = /* your signer */ {};
+const logger: Logger | undefined = undefined; // optional
+
+const plugin = new NPCOnDemandPlugin(
+  baseUrl,
+  signer,
+  sinceGetter,
+  sinceSetter,
+  logger
+);
+
+// Register with coco-cashu-core (pseudo-code)
+// core.use(plugin);
+
+// Trigger on demand as needed
+await plugin.syncOnce();
+```
+
+API additions:
+
+```ts
+class NPCOnDemandPlugin {
+  constructor(
+    baseUrl: string,
+    signer: any,
+    sinceGetter: () => Promise<number>,
+    sinceSetter: (since: number) => Promise<void>,
+    logger?: Logger
+  );
+
+  onInit(ctx: PluginContext<["mintQuoteService"]>): void | Promise<void>;
+
+  // Triggers a single sync cycle
+  syncOnce(): Promise<void>;
+
+  readonly name: "npubcashPluginOnDemand";
+  readonly required: ["mintQuoteService"];
+}
+```

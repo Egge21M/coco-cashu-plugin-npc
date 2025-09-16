@@ -1,7 +1,22 @@
 {
   "name": "coco-cashu-plugin-npc",
   "module": "./src/index.ts",
+  "version": "1.0.1",
   "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "require": "./dist/index.cjs",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsdown"
+  },
+  "files": [
+    "README.md",
+    "dist"
+  ],
   "devDependencies": {
     "@types/bun": "latest",
     "tsdown": "^0.15.1"
