@@ -1,6 +1,8 @@
 import type { Logger, Plugin, PluginContext } from "coco-cashu-core";
 import { JWTAuthProvider, NPCClient } from "npubcash-sdk";
 import { syncPaidQuotesOnce } from "../sync/syncPaidQuotes";
+import type { SinceStore } from "../sync/sinceStore";
+import { MemorySinceStore } from "../sync/sinceStore";
 
 const requiredServices = ["mintQuoteService"] as const;
 
@@ -8,8 +10,7 @@ export class NPCOnDemandPlugin implements Plugin<typeof requiredServices> {
   readonly name = "npubcashPluginOnDemand";
   readonly required = requiredServices;
   private npcClient: NPCClient;
-  private sinceGetter: () => Promise<number>;
-  private sinceSetter: (since: number) => Promise<void>;
+  private sinceStore: SinceStore;
   private logger?: Logger;
   private isRunning = false;
   private ctx?: PluginContext<typeof requiredServices>;
@@ -18,12 +19,10 @@ export class NPCOnDemandPlugin implements Plugin<typeof requiredServices> {
   constructor(
     baseUrl: string,
     signer: any,
-    sinceGetter: () => Promise<number>,
-    sinceSetter: (since: number) => Promise<void>,
+    sinceStore?: SinceStore,
     logger?: Logger
   ) {
-    this.sinceGetter = sinceGetter;
-    this.sinceSetter = sinceSetter;
+    this.sinceStore = sinceStore ?? new MemorySinceStore(0);
     this.logger =
       logger && (logger as any).child
         ? (logger as any).child({ module: "NPCOnDemandPlugin" })
@@ -60,8 +59,7 @@ export class NPCOnDemandPlugin implements Plugin<typeof requiredServices> {
       if (!ctx) throw new Error("NPCOnDemandPlugin not initialized");
       await syncPaidQuotesOnce({
         npcClient: this.npcClient,
-        sinceGetter: this.sinceGetter,
-        sinceSetter: this.sinceSetter,
+        sinceStore: this.sinceStore,
         mintQuoteService: ctx.services.mintQuoteService,
         logger: this.logger,
       });

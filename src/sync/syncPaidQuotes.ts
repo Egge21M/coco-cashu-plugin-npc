@@ -1,17 +1,16 @@
 import type { Logger, MintQuote, ServiceMap } from "coco-cashu-core";
 import type { NPCClient } from "npubcash-sdk";
+import type { SinceStore } from "./sinceStore";
 
 export async function syncPaidQuotesOnce(options: {
   npcClient: NPCClient;
-  sinceGetter: () => Promise<number>;
-  sinceSetter: (since: number) => Promise<void>;
+  sinceStore: SinceStore;
   mintQuoteService: ServiceMap["mintQuoteService"];
   logger?: Logger;
 }): Promise<void> {
-  const { npcClient, sinceGetter, sinceSetter, mintQuoteService, logger } =
-    options;
+  const { npcClient, sinceStore, mintQuoteService, logger } = options;
 
-  const since = (await sinceGetter()) ?? 0;
+  const since = (await sinceStore.get()) ?? 0;
   // `getQuotesSince` comes from npubcash-sdk; returns paid quotes with fields we map below
   const quotes: any[] = await (npcClient as any).getQuotesSince(since);
   if (!quotes || quotes.length === 0) return;
@@ -40,5 +39,5 @@ export async function syncPaidQuotesOnce(options: {
     (max: number, q: any) => Math.max(max, q?.paidAt ?? 0),
     since
   );
-  if (latestTimestamp > since) await sinceSetter(latestTimestamp);
+  if (latestTimestamp > since) await sinceStore.set(latestTimestamp);
 }
