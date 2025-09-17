@@ -4,7 +4,7 @@ import { syncPaidQuotesOnce } from "../sync/syncPaidQuotes";
 import type { SinceStore } from "../sync/sinceStore";
 import { MemorySinceStore } from "../sync/sinceStore";
 
-const requiredServices = ["mintQuoteService"] as const;
+const requiredServices = ["mintQuoteService", "mintService"] as const;
 
 export class NPCOnDemandPlugin implements Plugin<typeof requiredServices> {
   readonly name = "npubcashPluginOnDemand";
@@ -41,9 +41,7 @@ export class NPCOnDemandPlugin implements Plugin<typeof requiredServices> {
 
   onInit(ctx: PluginContext<typeof requiredServices>): void | Promise<void> {
     this.ctx = ctx;
-    ctx.registerCleanup(async () => {
-      // No interval to clean up.
-    });
+    ctx.registerCleanup(async () => {});
   }
 
   onReady(): void | Promise<void> {
@@ -61,6 +59,7 @@ export class NPCOnDemandPlugin implements Plugin<typeof requiredServices> {
         npcClient: this.npcClient,
         sinceStore: this.sinceStore,
         mintQuoteService: ctx.services.mintQuoteService,
+        mintService: ctx.services.mintService,
         logger: this.logger,
       });
     } catch (err) {

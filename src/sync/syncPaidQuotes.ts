@@ -6,9 +6,11 @@ export async function syncPaidQuotesOnce(options: {
   npcClient: NPCClient;
   sinceStore: SinceStore;
   mintQuoteService: ServiceMap["mintQuoteService"];
+  mintService: ServiceMap["mintService"];
   logger?: Logger;
 }): Promise<void> {
-  const { npcClient, sinceStore, mintQuoteService, logger } = options;
+  const { npcClient, sinceStore, mintQuoteService, mintService, logger } =
+    options;
 
   const since = (await sinceStore.get()) ?? 0;
   // `getQuotesSince` comes from npubcash-sdk; returns paid quotes with fields we map below
@@ -30,9 +32,10 @@ export async function syncPaidQuotesOnce(options: {
   }
 
   await Promise.all(
-    Object.entries(mintUrlToQuotes).map(([mintUrl, list]) =>
-      Promise.resolve(mintQuoteService.addExistingMintQuotes(mintUrl, list))
-    )
+    Object.entries(mintUrlToQuotes).map(async ([mintUrl, list]) => {
+      await mintService.addMintByUrl(mintUrl);
+      await mintQuoteService.addExistingMintQuotes(mintUrl, list);
+    })
   );
 
   const latestTimestamp = quotes.reduce(

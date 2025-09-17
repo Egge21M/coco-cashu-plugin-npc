@@ -4,7 +4,7 @@ import { syncPaidQuotesOnce } from "../sync/syncPaidQuotes";
 import type { SinceStore } from "../sync/sinceStore";
 import { MemorySinceStore } from "../sync/sinceStore";
 
-const requiredServices = ["mintQuoteService"] as const;
+const requiredServices = ["mintQuoteService", "mintService"] as const;
 
 export class NPCPlugin implements Plugin<typeof requiredServices> {
   readonly name = "npubcashPlugin";
@@ -66,6 +66,7 @@ export class NPCPlugin implements Plugin<typeof requiredServices> {
           npcClient: this.npcClient,
           sinceStore: this.sinceStore,
           mintQuoteService: ctx.services.mintQuoteService,
+          mintService: ctx.services.mintService,
           logger: this.logger,
         });
       } catch (err) {
