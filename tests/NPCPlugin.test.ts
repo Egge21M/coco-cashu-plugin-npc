@@ -45,12 +45,9 @@ describe("NPCPlugin", () => {
             calls.addExisting.push({ url, list }),
         },
       },
-      registerCleanup: (fn: () => any) => {
-        (ctx as any)._cleanup = fn;
-      },
     };
 
-    plugin.onInit(ctx);
+    const initCleanup = plugin.onInit(ctx);
 
     // replace internal npc client with stub
     plugin.npcClient = {
@@ -71,7 +68,7 @@ describe("NPCPlugin", () => {
     expect(await sinceStore.get()).toBe(10);
 
     // cleanup clears interval
-    await (ctx as any)._cleanup();
+    await (initCleanup as any)?.();
     expect(t.cleared()).toBe(777);
     t.restore();
   });
@@ -91,9 +88,8 @@ describe("NPCPlugin", () => {
           addExistingMintQuotes: async (_: string, __: any[]) => {},
         },
       },
-      registerCleanup: () => {},
     };
-    plugin.onInit(ctx);
+    const initCleanup = plugin.onInit(ctx);
 
     let calls = 0;
     plugin.npcClient = {
@@ -112,6 +108,7 @@ describe("NPCPlugin", () => {
     const p2 = t.timers[0]!.fn();
     await Promise.all([p1, p2]);
     expect(calls).toBe(1);
+    await (initCleanup as any)?.();
     t.restore();
   });
 });
