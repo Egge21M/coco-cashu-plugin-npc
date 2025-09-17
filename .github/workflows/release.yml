@@ -1,0 +1,20 @@
+name: Publish Package to npmjs
+permissions:
+  contents: read
+  id-token: write
+on:
+  release:
+    types: [released]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.2.18
+      - run: bun install --frozen-lockfile
+      - run: bun run build
+      - run: bun publish --provenance
+        env:
+          NODE_CONFIG_TOKEN: ${{ secrets.NPM_TOKEN }}
