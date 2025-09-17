@@ -11,7 +11,7 @@
         "tsdown": "^0.15.1",
       },
       "peerDependencies": {
-        "coco-cashu-core": "^1.0.0-rc6",
+        "coco-cashu-core": "^1.0.0-rc7",
         "typescript": "^5",
       },
     },
@@ -111,7 +111,7 @@
 
     "chokidar": ["chokidar@4.0.3", "", { "dependencies": { "readdirp": "^4.0.1" } }, "sha512-Qgzu8kfBvo+cA4962jnP1KkS6Dop5NS6g7R5LFYJr4b8Ub94PPQXUksCw9PvXoeXPRRddRNC5C1JQUR2SMGtnA=="],
 
-    "coco-cashu-core": ["coco-cashu-core@1.0.0-rc6", "", { "dependencies": { "@cashu/cashu-ts": "^2.7.2" }, "peerDependencies": { "typescript": "^5" } }, "sha512-VpPLkIUqC1keftZoLZ2ugkeX88YvC19thZwPlJUhlFYJiw4nsxIK2eyX6K8y20C036/YLT1cCZjhGebGwiHpiQ=="],
+    "coco-cashu-core": ["coco-cashu-core@1.0.0-rc7", "", { "dependencies": { "@cashu/cashu-ts": "^2.7.2" }, "peerDependencies": { "typescript": "^5" } }, "sha512-3HZZrynXn4BDDk0r6mQmH7dAr8guOFVHgHXjUrYqTdXc6SLyYB7KTr6dL0P5IvitBWFSP7bSz9MW60u9earSAA=="],
 
     "csstype": ["csstype@3.1.3", "", {}, "sha512-M1uQkMl8rQK/szD0LNhtqxIPLpimGm8sOBwU7lLnCpSbTyY3yeU1Vc7l4KT5zT4s/yOxHH5O7tIuuLOCnLADRw=="],
 

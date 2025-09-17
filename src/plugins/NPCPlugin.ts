@@ -23,7 +23,7 @@ export class NPCPlugin implements Plugin<typeof requiredServices> {
     signer: any,
     sinceStore?: SinceStore,
     logger?: Logger,
-    pollIntervalMs = 25000
+    pollIntervalMs = 25000,
   ) {
     this.sinceStore = sinceStore ?? new MemorySinceStore(0);
     this.logger =
@@ -38,19 +38,19 @@ export class NPCPlugin implements Plugin<typeof requiredServices> {
         signer,
         logger && (logger as any).child
           ? (logger as any).child({ module: "NPC" })
-          : logger
-      )
+          : logger,
+      ),
     );
   }
 
-  onInit(ctx: PluginContext<typeof requiredServices>): void | Promise<void> {
+  onInit(ctx: PluginContext<typeof requiredServices>) {
     this.ctx = ctx;
-    ctx.registerCleanup(async () => {
+    return async () => {
       if (this.pollTimer) {
         clearInterval(this.pollTimer);
         this.pollTimer = undefined;
       }
-    });
+    };
   }
 
   onReady(): void | Promise<void> {

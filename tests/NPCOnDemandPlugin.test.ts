@@ -8,7 +8,7 @@ describe("NPCOnDemandPlugin", () => {
     const plugin: any = new NPCOnDemandPlugin(
       "https://npc.example.com",
       {} as any,
-      sinceStore
+      sinceStore,
     );
 
     const calls: any = {
@@ -48,7 +48,7 @@ describe("NPCOnDemandPlugin", () => {
     const plugin: any = new NPCOnDemandPlugin(
       "https://npc.example.com",
       {} as any,
-      sinceStore
+      sinceStore,
     );
 
     const ctx: any = {

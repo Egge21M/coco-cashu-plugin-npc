@@ -20,7 +20,7 @@ export class NPCOnDemandPlugin implements Plugin<typeof requiredServices> {
     baseUrl: string,
     signer: any,
     sinceStore?: SinceStore,
-    logger?: Logger
+    logger?: Logger,
   ) {
     this.sinceStore = sinceStore ?? new MemorySinceStore(0);
     this.logger =
@@ -34,16 +34,14 @@ export class NPCOnDemandPlugin implements Plugin<typeof requiredServices> {
         signer,
         logger && (logger as any).child
           ? (logger as any).child({ module: "NPC" })
-          : logger
-      )
+          : logger,
+      ),
     );
   }
 
   onInit(ctx: PluginContext<typeof requiredServices>): void | Promise<void> {
     this.ctx = ctx;
-    ctx.registerCleanup(async () => {});
   }
-
   onReady(): void | Promise<void> {
     this.isReady = true;
   }
