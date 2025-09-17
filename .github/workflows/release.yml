@@ -17,4 +17,4 @@ jobs:
       - run: bun run build
       - run: bun publish --provenance
         env:
-          NODE_CONFIG_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_TOKEN: ${{ secrets.NPM_TOKEN }}
