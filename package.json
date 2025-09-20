@@ -23,7 +23,7 @@
     "tsdown": "^0.15.1"
   },
   "peerDependencies": {
-    "coco-cashu-core": "^1.0.0-rc7",
+    "coco-cashu-core": "^1.0.0-rc8",
     "typescript": "^5"
   },
   "dependencies": {
