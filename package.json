@@ -27,6 +27,6 @@
     "typescript": "^5"
   },
   "dependencies": {
-    "npubcash-sdk": "^0.1.4"
+    "npubcash-sdk": "0.2"
   }
 }

@@ -4,7 +4,7 @@
     "": {
       "name": "coco-cashu-plugin-npc",
       "dependencies": {
-        "npubcash-sdk": "^0.1.4",
+        "npubcash-sdk": "0.2",
       },
       "devDependencies": {
         "@types/bun": "latest",
@@ -143,7 +143,7 @@
 
     "nostr-wasm": ["nostr-wasm@0.1.0", "", {}, "sha512-78BTryCLcLYv96ONU8Ws3Q1JzjlAt+43pWQhIl86xZmWeegYCNLPml7yQ+gG3vR6V5h4XGj+TxO+SS5dsThQIA=="],
 
-    "npubcash-sdk": ["npubcash-sdk@0.1.4", "", { "dependencies": { "nostr-tools": "^2.15.0", "npubcash-types": "^0.1.1" } }, "sha512-l85nUl9h+iyobukJv0uoV1qSRA32IMm+WJAN8HOQ3z7idOuX2QbwRbMFZx+ExqlswFPeU4NUsGb/Gy/hmFKVvA=="],
+    "npubcash-sdk": ["npubcash-sdk@0.2.0", "", { "dependencies": { "nostr-tools": "^2.15.0", "npubcash-types": "^0.1.1" } }, "sha512-Y8UcXYsEbW0mm5VrZDHG1i4YrwYAwFbJPFqQ6GOyVxFDt6/JZ42yLPMu+wWKvEEOCJO5IHwwYkiXQXzFyAK3pA=="],
 
     "npubcash-types": ["npubcash-types@0.1.1", "", {}, "sha512-/HGfes2cvQpkrWOuUrdemJJhJUQu+xiXl4x+AxQtKUMGCB8uEhfrXJfAQ0n+DgtkIX1YVLOh0a/e6E5LX+fUew=="],
 
