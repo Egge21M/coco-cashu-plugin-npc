@@ -1,10 +1,9 @@
 import { describe, it, expect } from "bun:test";
-import { NPCPlugin, NPCOnDemandPlugin, MemorySinceStore } from "../src";
+import { NPCPlugin, MemorySinceStore } from "../src";
 
 describe("index barrel exports", () => {
-  it("exports NPCPlugin, NPCOnDemandPlugin, MemorySinceStore", () => {
+  it("exports NPCPlugin and MemorySinceStore", () => {
     expect(typeof NPCPlugin).toBe("function");
-    expect(typeof NPCOnDemandPlugin).toBe("function");
     expect(typeof MemorySinceStore).toBe("function");
   });
 

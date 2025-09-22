@@ -2,33 +2,32 @@ import { describe, it, expect } from "bun:test";
 import { NPCPlugin } from "../src/plugins/NPCPlugin";
 import { MemorySinceStore } from "../src/sync/sinceStore";
 
-function stubTimers() {
-  const originalSetInterval = globalThis.setInterval;
-  const originalClearInterval = globalThis.clearInterval;
-  const timers: { fn: () => Promise<void> | void; ms: number }[] = [];
-  let clearedWith: any = undefined;
-  (globalThis as any).setInterval = (fn: any, ms: number) => {
-    timers.push({ fn, ms });
-    return 777 as any;
+function stubTimeout() {
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalClearTimeout = globalThis.clearTimeout;
+  const timeouts: { fn: () => Promise<void> | void; ms: number }[] = [];
+  let cleared = false;
+  (globalThis as any).setTimeout = (fn: any, ms: number) => {
+    timeouts.push({ fn, ms });
+    return 888 as any;
   };
-  (globalThis as any).clearInterval = (id: any) => {
-    clearedWith = id;
+  (globalThis as any).clearTimeout = (_: any) => {
+    cleared = true;
   };
   function restore() {
-    (globalThis as any).setInterval = originalSetInterval;
-    (globalThis as any).clearInterval = originalClearInterval;
+    (globalThis as any).setTimeout = originalSetTimeout;
+    (globalThis as any).clearTimeout = originalClearTimeout;
   }
-  return { timers, cleared: () => clearedWith, restore };
+  return { timeouts, wasCleared: () => cleared, restore };
 }
 
-describe("NPCPlugin", () => {
-  it("starts interval on ready, runs sync, and cleans up on shutdown", async () => {
+describe("NPCPlugin (interval)", () => {
+  it("arms resettable timer, runs sync, and cleans up on shutdown", async () => {
     const sinceStore = new MemorySinceStore(0);
-    const plugin: any = new NPCPlugin(
-      "https://npc.example.com",
-      {} as any,
-      sinceStore
-    );
+    const plugin: any = new NPCPlugin("https://npc.example.com", {} as any, {
+      sinceStore,
+      syncIntervalMs: 1000,
+    });
 
     // fake services & ctx
     const calls: any = {
@@ -56,30 +55,29 @@ describe("NPCPlugin", () => {
       ],
     } as any;
 
-    const t = stubTimers();
+    const t = stubTimeout();
     plugin.onReady();
-    expect(t.timers.length).toBe(1);
+    expect(t.timeouts.length).toBe(1);
 
     // run one interval tick
-    await t.timers[0]!.fn();
+    await t.timeouts[0]!.fn();
 
     expect(calls.addMintByUrl).toEqual(["https://mint.a"]);
     expect(calls.addExisting.length).toBe(1);
     expect(await sinceStore.get()).toBe(10);
 
-    // cleanup clears interval
+    // cleanup clears timeout
     await (initCleanup as any)?.();
-    expect(t.cleared()).toBe(777);
+    expect(t.wasCleared()).toBe(true);
     t.restore();
   });
 
-  it("guards against overlapping polls", async () => {
+  it("guards against overlapping timer triggers", async () => {
     const sinceStore = new MemorySinceStore(0);
-    const plugin: any = new NPCPlugin(
-      "https://npc.example.com",
-      {} as any,
-      sinceStore
-    );
+    const plugin: any = new NPCPlugin("https://npc.example.com", {} as any, {
+      sinceStore,
+      syncIntervalMs: 1000,
+    });
 
     const ctx: any = {
       services: {
@@ -95,17 +93,18 @@ describe("NPCPlugin", () => {
     plugin.npcClient = {
       getQuotesSince: async () => {
         calls += 1;
-        await new Promise((r) => setTimeout(r, 5));
+        // No timer-based delay here, because setTimeout is stubbed in this test
+        // and would otherwise prevent the promise from resolving.
         return [];
       },
     } as any;
 
-    const t = stubTimers();
+    const t = stubTimeout();
     plugin.onReady();
-    expect(t.timers.length).toBe(1);
+    expect(t.timeouts.length).toBe(1);
 
-    const p1 = t.timers[0]!.fn();
-    const p2 = t.timers[0]!.fn();
+    const p1 = t.timeouts[0]!.fn();
+    const p2 = t.timeouts[0]!.fn();
     await Promise.all([p1, p2]);
     expect(calls).toBe(1);
     await (initCleanup as any)?.();

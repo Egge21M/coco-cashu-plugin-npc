@@ -1,15 +1,13 @@
 import { describe, it, expect } from "bun:test";
-import { NPCOnDemandPlugin } from "../src/plugins/NPCOnDemandPlugin";
+import { NPCPlugin } from "../src/plugins/NPCPlugin";
 import { MemorySinceStore } from "../src/sync/sinceStore";
 
-describe("NPCOnDemandPlugin", () => {
-  it("runs a single sync cycle when syncOnce is called", async () => {
+describe("NPCPlugin (manual)", () => {
+  it("runs a single sync cycle when sync is called", async () => {
     const sinceStore = new MemorySinceStore(0);
-    const plugin: any = new NPCOnDemandPlugin(
-      "https://npc.example.com",
-      {} as any,
+    const plugin: any = new NPCPlugin("https://npc.example.com", {} as any, {
       sinceStore,
-    );
+    });
 
     const calls: any = {
       addMintByUrl: [] as string[],
@@ -36,20 +34,18 @@ describe("NPCOnDemandPlugin", () => {
       ],
     } as any;
 
-    await plugin.syncOnce();
+    await plugin.sync();
 
     expect(calls.addMintByUrl).toEqual(["https://mint.a"]);
     expect(calls.addExisting.length).toBe(1);
     expect(await sinceStore.get()).toBe(10);
   });
 
-  it("prevents overlapping syncOnce runs", async () => {
+  it("prevents overlapping manual sync runs", async () => {
     const sinceStore = new MemorySinceStore(0);
-    const plugin: any = new NPCOnDemandPlugin(
-      "https://npc.example.com",
-      {} as any,
+    const plugin: any = new NPCPlugin("https://npc.example.com", {} as any, {
       sinceStore,
-    );
+    });
 
     const ctx: any = {
       services: {
@@ -67,13 +63,12 @@ describe("NPCOnDemandPlugin", () => {
     plugin.npcClient = {
       getQuotesSince: async () => {
         calls += 1;
-        await new Promise((r) => setTimeout(r, 5));
         return [];
       },
     } as any;
 
-    const p1 = plugin.syncOnce();
-    const p2 = plugin.syncOnce();
+    const p1 = plugin.sync();
+    const p2 = plugin.sync();
     await Promise.all([p1, p2]);
     expect(calls).toBe(1);
   });
