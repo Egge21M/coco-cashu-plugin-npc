@@ -31,10 +31,10 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "npubcash-sdk": "~0.2.0"
+    "npubcash-sdk": "^0.3.1"
   },
   "peerDependencies": {
-    "coco-cashu-core": "^1.1.2-rc.35",
+    "coco-cashu-core": "^1.1.2-rc.36",
     "typescript": "^5.0.0"
   },
   "devDependencies": {
