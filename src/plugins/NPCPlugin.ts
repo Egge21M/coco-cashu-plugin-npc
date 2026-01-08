@@ -12,8 +12,13 @@ import {
   isValidQuote,
   isValidUrl,
 } from "../types";
+import { PluginApi } from "../PluginApi";
 
-const requiredServices = ["mintQuoteService", "mintService"] as const;
+const requiredServices = [
+  "mintQuoteService",
+  "mintService",
+  "paymentRequestService",
+] as const;
 
 /** Trigger types for sync operations */
 type SyncTrigger = "manual" | "websocket" | "interval";
@@ -151,6 +156,7 @@ export class NPCPlugin implements Plugin<typeof requiredServices> {
    */
   onInit(ctx: PluginContext<typeof requiredServices>): () => Promise<void> {
     this.ctx = ctx;
+    ctx.registerExtension("npc", new PluginApi(ctx.services.p));
     return async () => {
       await this.shutdown();
     };
