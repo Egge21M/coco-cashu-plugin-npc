@@ -156,7 +156,10 @@ export class NPCPlugin implements Plugin<typeof requiredServices> {
    */
   onInit(ctx: PluginContext<typeof requiredServices>): () => Promise<void> {
     this.ctx = ctx;
-    ctx.registerExtension("npc", new PluginApi(ctx.services.p));
+    ctx.registerExtension(
+      "npc",
+      new PluginApi(ctx.services.paymentRequestService, this.npcClient),
+    );
     return async () => {
       await this.shutdown();
     };
