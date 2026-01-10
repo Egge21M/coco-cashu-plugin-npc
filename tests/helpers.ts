@@ -29,6 +29,7 @@ export function createMockServices() {
         calls.addExisting.push({ url, list });
       },
     },
+    paymentRequestService: {},
   };
 
   return { calls, services };
@@ -41,7 +42,10 @@ export function createMockContext() {
   const { calls, services } = createMockServices();
   return {
     calls,
-    ctx: { services },
+    ctx: {
+      services,
+      registerExtension: () => {},
+    },
   };
 }
 

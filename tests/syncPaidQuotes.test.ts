@@ -37,7 +37,9 @@ describe("NPCPlugin sync mapping", () => {
             calls.addExisting.push({ url, list });
           },
         },
+        paymentRequestService: {},
       },
+      registerExtension: () => {},
     };
 
     plugin.onInit(ctx as Parameters<typeof plugin.onInit>[0]);
@@ -97,7 +99,9 @@ describe("NPCPlugin sync mapping", () => {
         mintQuoteService: {
           addExistingMintQuotes: async () => {},
         },
+        paymentRequestService: {},
       },
+      registerExtension: () => {},
     };
 
     plugin.onInit(ctx as Parameters<typeof plugin.onInit>[0]);
@@ -147,7 +151,9 @@ describe("NPCPlugin sync mapping", () => {
             calls.addExisting.push({ url, list });
           },
         },
+        paymentRequestService: {},
       },
+      registerExtension: () => {},
     };
 
     plugin.onInit(ctx as Parameters<typeof plugin.onInit>[0]);
