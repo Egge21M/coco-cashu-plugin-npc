@@ -1,6 +1,6 @@
 {
   "name": "coco-cashu-plugin-npc",
-  "version": "2.2.3",
+  "version": "2.2.4",
   "description": "NPubCash plugin for coco-cashu-core - bridges NPubCash server with coco-cashu wallet",
   "keywords": [
     "cashu",
