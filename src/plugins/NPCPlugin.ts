@@ -418,7 +418,7 @@ export class NPCPlugin implements Plugin<typeof requiredServices> {
     await Promise.all(
       Array.from(mintUrlToQuotes.entries()).map(async ([mintUrl, list]) => {
         try {
-          await mintService.addMintByUrl(mintUrl);
+          await mintService.addMintByUrl(mintUrl, { trusted: true });
 
           const transformedQuotes = list.map((quote) => ({
             ...quote,
