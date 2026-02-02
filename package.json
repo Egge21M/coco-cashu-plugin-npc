@@ -34,7 +34,7 @@
     "npubcash-sdk": "^0.3.2"
   },
   "peerDependencies": {
-    "coco-cashu-core": "^1.1.2-rc.38",
+    "coco-cashu-core": "^1.1.2-rc.39",
     "typescript": "^5.0.0"
   },
   "devDependencies": {
