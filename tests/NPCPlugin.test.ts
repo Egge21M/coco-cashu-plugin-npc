@@ -12,7 +12,7 @@ describe("NPCPlugin (interval)", () => {
     });
 
     const { calls, ctx } = createMockContext();
-    const cleanup = plugin.onInit(ctx as Parameters<typeof plugin.onInit>[0]);
+    const cleanup = plugin.onInit(ctx as unknown as Parameters<typeof plugin.onInit>[0]);
 
     // Replace internal npc client with stub
     (plugin as unknown as { npcClient: unknown }).npcClient = {
@@ -55,7 +55,7 @@ describe("NPCPlugin (interval)", () => {
     });
 
     const { ctx } = createMockContext();
-    const cleanup = plugin.onInit(ctx as Parameters<typeof plugin.onInit>[0]);
+    const cleanup = plugin.onInit(ctx as unknown as Parameters<typeof plugin.onInit>[0]);
 
     let concurrentCalls = 0;
     let maxConcurrent = 0;
@@ -97,6 +97,99 @@ describe("NPCPlugin (interval)", () => {
       t.restore();
     }
   });
+
+  it("rearms the interval after sync completion", async () => {
+    const sinceStore = new MemorySinceStore(0);
+    const plugin = new NPCPlugin("https://npc.example.com", createMockSigner(), {
+      sinceStore,
+      syncIntervalMs: 1000,
+    });
+
+    const { ctx } = createMockContext();
+    const cleanup = plugin.onInit(ctx as unknown as Parameters<typeof plugin.onInit>[0]);
+
+    let resolveSync: (() => void) | undefined;
+    (plugin as unknown as { npcClient: unknown }).npcClient = {
+      getQuotesSince: async () => {
+        await new Promise<void>((resolve) => {
+          resolveSync = resolve;
+        });
+        return [];
+      },
+    };
+
+    const t = stubTimeout();
+    try {
+      plugin.onReady();
+      expect(t.timeouts.length).toBe(1);
+
+      t.timeouts[0]!.fn();
+      await Promise.resolve();
+
+      expect(t.timeouts.length).toBe(1);
+
+      resolveSync?.();
+
+      const pluginInternal = plugin as unknown as { runPromise?: Promise<void> };
+      while (pluginInternal.runPromise) {
+        await pluginInternal.runPromise;
+      }
+
+      expect(t.timeouts.length).toBe(2);
+      await cleanup();
+    } finally {
+      t.restore();
+    }
+  });
+});
+
+describe("NPCPlugin (websocket)", () => {
+  it("disposes the failed subscription before reconnecting", async () => {
+    const plugin = new NPCPlugin("https://npc.example.com", createMockSigner(), {
+      useWebsocket: true,
+    });
+
+    const { ctx } = createMockContext();
+    const cleanup = plugin.onInit(ctx as unknown as Parameters<typeof plugin.onInit>[0]);
+
+    const unsubscribeCalls: number[] = [];
+    const subscriptions: Array<{ onError?: (error: unknown) => void }> = [];
+
+    (plugin as unknown as { npcClient: unknown }).npcClient = {
+      subscribe: (
+        _onUpdate: (quoteId: string) => void,
+        onError?: (error: unknown) => void,
+      ) => {
+        const index = subscriptions.length;
+        subscriptions.push({ onError });
+        unsubscribeCalls[index] = 0;
+
+        return () => {
+          unsubscribeCalls[index] += 1;
+        };
+      },
+    };
+
+    const t = stubTimeout();
+    try {
+      plugin.onReady();
+      expect(subscriptions.length).toBe(1);
+
+      subscriptions[0]?.onError?.("boom");
+
+      expect(unsubscribeCalls[0]).toBe(1);
+      expect(t.timeouts.length).toBe(1);
+
+      t.timeouts[0]!.fn();
+      expect(subscriptions.length).toBe(2);
+
+      await cleanup();
+      expect(unsubscribeCalls[0]).toBe(1);
+      expect(unsubscribeCalls[1]).toBe(1);
+    } finally {
+      t.restore();
+    }
+  });
 });
 
 describe("NPCPlugin (constructor validation)", () => {
@@ -128,7 +221,7 @@ describe("NPCPlugin (status)", () => {
     const plugin = new NPCPlugin("https://npc.example.com", createMockSigner());
     const { ctx } = createMockContext();
 
-    plugin.onInit(ctx as Parameters<typeof plugin.onInit>[0]);
+    plugin.onInit(ctx as unknown as Parameters<typeof plugin.onInit>[0]);
     expect(plugin.getStatus().isInitialized).toBe(true);
     expect(plugin.getStatus().isReady).toBe(false);
 
@@ -145,7 +238,7 @@ describe("NPCPlugin (shutdown)", () => {
     });
 
     const { ctx } = createMockContext();
-    plugin.onInit(ctx as Parameters<typeof plugin.onInit>[0]);
+    plugin.onInit(ctx as unknown as Parameters<typeof plugin.onInit>[0]);
     plugin.onReady();
 
     let syncStarted = false;

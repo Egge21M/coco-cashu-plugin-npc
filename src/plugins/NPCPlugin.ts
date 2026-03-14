@@ -222,9 +222,17 @@ export class NPCPlugin implements Plugin<typeof requiredServices> {
       this.wsReconnectTimer = undefined;
     }
 
-    if (this.unsubscribe) {
+    this.disposeWebSocketSubscription();
+  }
+
+  private disposeWebSocketSubscription(): void {
+    const unsubscribe = this.unsubscribe;
+    this.unsubscribe = undefined;
+    this.isWebSocketConnected = false;
+
+    if (unsubscribe) {
       try {
-        this.unsubscribe();
+        unsubscribe();
       } catch (err) {
         this.logger?.warn?.(
           formatLogMessage("Error during WebSocket unsubscribe", {
@@ -232,8 +240,6 @@ export class NPCPlugin implements Plugin<typeof requiredServices> {
           }),
         );
       }
-      this.unsubscribe = undefined;
-      this.isWebSocketConnected = false;
     }
   }
 
@@ -248,13 +254,13 @@ export class NPCPlugin implements Plugin<typeof requiredServices> {
           void this.requestSync("websocket");
         },
         (error) => {
-          this.isWebSocketConnected = false;
           this.logger?.error?.(
             formatLogMessage("WebSocket error", {
               err: String(error),
               attempts: this.wsReconnectAttempts,
             }),
           );
+          this.disposeWebSocketSubscription();
           this.scheduleWebSocketReconnect();
         },
       );
@@ -270,8 +276,7 @@ export class NPCPlugin implements Plugin<typeof requiredServices> {
   private scheduleWebSocketReconnect(): void {
     if (this.isShuttingDown || this.wsReconnectTimer) return;
 
-    this.unsubscribe = undefined;
-    this.isWebSocketConnected = false;
+    this.disposeWebSocketSubscription();
 
     const delay = Math.min(
       WEBSOCKET_DEFAULTS.INITIAL_DELAY_MS *
@@ -312,11 +317,6 @@ export class NPCPlugin implements Plugin<typeof requiredServices> {
   private async requestSync(trigger: SyncTrigger): Promise<void> {
     if (!this.isReady || this.isShuttingDown) return;
 
-    // Rearm interval timer for all triggers
-    if (trigger === "interval") {
-      this.armIntervalTimer();
-    }
-
     // If already running, mark pending update and return existing promise
     if (this.isRunning) {
       this.hasPendingUpdate = true;
@@ -348,6 +348,9 @@ export class NPCPlugin implements Plugin<typeof requiredServices> {
           formatLogMessage("Sync failed", { err: String(err), trigger }),
         );
       } finally {
+        if (!this.isShuttingDown) {
+          this.armIntervalTimer();
+        }
         this.isRunning = false;
         this.runPromise = undefined;
       }
