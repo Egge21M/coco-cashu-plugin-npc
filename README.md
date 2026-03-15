@@ -1,152 +1,130 @@
-### coco-cashu-plugin-npc
+# coco-cashu-plugin-npc
 
-NPC plugin for coco-cashu-core. It bridges an NPubCash (NPC) server into the coco lifecycle by polling for newly paid quotes, converting them to `MintQuote`s, and feeding them to the core `mintQuoteService`.
+`coco-cashu-plugin-npc` integrates an NPubCash account with `coco-cashu-core`.
+It syncs paid quotes from an NPC server, converts them into coco mint quotes, and
+forwards them through the host's `mintQuoteService`.
 
-- **Polls NPC for paid quotes** since a persisted timestamp
-- **Groups by `mintUrl`** and forwards via `mintQuoteService.addExistingMintQuotes`
-- **Configurable polling** interval, lifecycle cleanup on shutdown
+- Polls NPC for paid quotes since a persisted timestamp
+- Optionally listens for realtime websocket updates
+- Groups quotes by `mintUrl` before forwarding them to coco
+- Exposes an `npc` extension API for info, username management, quote inspection, and manual sync
 
-#### Installation
-
-Install the plugin and its peer dependencies in your app:
+## Installation
 
 ```bash
-# npm
-npm install coco-cashu-plugin-npc coco-cashu-core@^1.0.0-rc6
+bun add coco-cashu-plugin-npc
 ```
 
-This package uses [`npubcash-sdk`](https://www.npmjs.com/package/npubcash-sdk) under the hood for NPC API access and JWT auth.
+Install the required peer dependencies in the host app as well:
 
-#### Quick start (interval-based)
+```bash
+bun add coco-cashu-core typescript
+```
+
+This package uses `npubcash-sdk` internally for NPC API access and JWT auth.
+
+## Quick Start
 
 ```ts
 import { NPCPlugin, MemorySinceStore } from "coco-cashu-plugin-npc";
-import type { Logger } from "coco-cashu-core";
-
-// Optional: pass your own SinceStore; defaults to in-memory if omitted
-const sinceStore = new MemorySinceStore(0);
-
-// Provide a signer supported by npubcash-sdk's JWTAuthProvider
-// See npubcash-sdk docs for signer options
-const signer: any = /* your signer */ {};
 
 const baseUrl = "https://npc.example.com";
-const logger: Logger | undefined = undefined; // optional
+const signer: any = /* signer supported by npubcash-sdk */ {};
 
-const plugin = new NPCPlugin(
-  baseUrl,
-  signer,
-  sinceStore, // optional; omit to use memory
-  logger,
-  25_000 // optional poll interval ms (default 25s)
-);
+const plugin = new NPCPlugin(baseUrl, signer, {
+  sinceStore: new MemorySinceStore(0),
+  syncIntervalMs: 25_000,
+  useWebsocket: true,
+});
 
-// Register with coco-cashu-core (pseudo-code)
-// core.use(plugin);
+// core.use(plugin)
 ```
 
-The core will call `onInit`, at which point the plugin starts polling. When the core shuts down, the plugin cleans up its timer via `registerCleanup`.
+The host calls `onInit()` during plugin registration and `onReady()` when services
+are ready. Once ready, the plugin can sync from its interval timer, from websocket
+notifications, or from the extension API's manual `sync()` call.
 
-#### How it works
+## Configuration
 
-On each poll cycle the plugin:
-
-- Loads the last processed timestamp via `SinceStore.get()`
-- Calls the NPC server for paid quotes since that timestamp
-- Groups by `mintUrl` and forwards to `mintQuoteService.addExistingMintQuotes(mintUrl, quotes)`
-- Persists the latest `paidAt` back via `SinceStore.set()`
-
-#### API
+`NPCPlugin` accepts an options object:
 
 ```ts
-class NPCPlugin {
-  constructor(
-    baseUrl: string,
-    signer: any,
-    sinceStore?: SinceStore,
-    logger?: Logger,
-    pollIntervalMs = 25_000
-  );
-
-  // Called by the core to start polling and register cleanup
-  onInit(ctx: PluginContext<["mintQuoteService"]>): void | Promise<void>;
-  // Called when the host is fully ready; starts the interval
-  onReady(): void | Promise<void>;
-
-  // Metadata required by coco-cashu-core
-  readonly name: "npubcashPlugin";
-  readonly required: ["mintQuoteService"];
+interface NPCPluginOptions {
+  syncIntervalMs?: number;
+  useWebsocket?: boolean;
+  sinceStore?: SinceStore;
+  logger?: Logger;
 }
 ```
 
-- **`baseUrl`**: NPC server base URL, e.g. `https://npc.example.com`
-- **`signer`**: Signer instance compatible with `npubcash-sdk` `JWTAuthProvider`
-- **`sinceStore`**: Optional store for last processed NPC `paidAt` (defaults to in-memory)
-- **`logger`**: Optional logger (child loggers are derived if supported)
-- **`pollIntervalMs`**: Polling interval in milliseconds (default 25_000)
+- `syncIntervalMs`: interval in milliseconds for polling; omit to disable interval syncing
+- `useWebsocket`: subscribe to realtime quote updates from NPC
+- `sinceStore`: persistence for the last processed `paidAt` timestamp; defaults to in-memory storage
+- `logger`: optional logger used by the plugin and derived child loggers
 
-Required service from the host core:
+## Extension API
 
-- **`mintQuoteService`**: must provide `addExistingMintQuotes(mintUrl, quotes)`
+When the plugin is initialized it registers the `npc` extension on the host.
 
-#### Notes
+```ts
+const npc = core.extensions.npc;
 
-- A reentrancy guard prevents overlapping polls; slow requests won’t stack.
-- Be sure to persist `since` durably (e.g., DB) for correct resume behavior.
-- Errors during polling are logged through the provided `logger` if available.
+await npc.getInfo();
+await npc.getQuotesSince(0);
+await npc.sync();
 
-#### Development
+const result = await npc.setUsername("alice", true);
+if (!result.success) {
+  console.log(result.pr);
+}
+```
 
-This is a TypeScript library. The public surface is exported from `src/index.ts`:
+Available methods:
+
+- `getInfo()`: fetch authenticated NPC account metadata
+- `setUsername(username, attemptPayment?)`: set the NPC username and optionally handle the payment-required flow through coco
+- `getQuotesSince(sinceUnix)`: inspect raw NPC quotes without importing them into coco
+- `sync()`: manually trigger the plugin's quote sync pipeline
+
+`sync()` uses the same guardrails as scheduled syncing: it waits for `onReady()`,
+batches overlapping calls, respects shutdown, validates quotes, groups by mint,
+and only advances `since` after successful processing.
+
+## Sync Behavior
+
+Each sync cycle:
+
+1. Reads the last processed timestamp from `SinceStore`
+2. Fetches paid quotes from NPC with `getQuotesSince(since)`
+3. Filters invalid quotes and invalid mint URLs
+4. Groups valid quotes by `mintUrl`
+5. Adds each mint as trusted and forwards transformed quotes to coco
+6. Advances `since` to the latest processed `paidAt` value
+
+Important behaviors:
+
+- overlapping sync requests are serialized
+- interval polling rearms after the current sync finishes
+- websocket failures are cleaned up before reconnect attempts are scheduled
+- `since` only advances after quote processing succeeds
+
+## Public Exports
+
+The package exports:
 
 ```ts
 export * from "./plugins/NPCPlugin";
-export * from "./plugins/NPCOnDemandPlugin";
 export * from "./sync/sinceStore";
+export * from "./types";
+export * from "./PluginApi";
 ```
 
-Run type checks or builds using your project’s toolchain (e.g., `tsc`, `tsdown`).
+## Development
 
-#### On-demand variant (no interval)
+Useful commands:
 
-If you prefer to control when syncing happens (e.g., on a cron job, webhook, or manual trigger), use `NPCOnDemandPlugin`. It exposes a `syncOnce()` method instead of running on an interval.
-
-```ts
-import { NPCOnDemandPlugin, MemorySinceStore } from "coco-cashu-plugin-npc";
-import type { Logger } from "coco-cashu-core";
-
-const baseUrl = "https://npc.example.com";
-const signer: any = /* your signer */ {};
-const logger: Logger | undefined = undefined; // optional
-const sinceStore = new MemorySinceStore(0); // optional; omit to use memory
-
-const plugin = new NPCOnDemandPlugin(baseUrl, signer, sinceStore, logger);
-
-// Register with coco-cashu-core (pseudo-code)
-// core.use(plugin);
-
-// Trigger on demand as needed
-await plugin.syncOnce();
-```
-
-API additions:
-
-```ts
-class NPCOnDemandPlugin {
-  constructor(
-    baseUrl: string,
-    signer: any,
-    sinceStore?: SinceStore,
-    logger?: Logger
-  );
-
-  onInit(ctx: PluginContext<["mintQuoteService"]>): void | Promise<void>;
-  onReady(): void | Promise<void>;
-
-  // Triggers a single sync cycle
-  syncOnce(): Promise<void>;
-
-  readonly name: "npubcashPluginOnDemand";
-  readonly required: ["mintQuoteService"];
-}
+```bash
+bun run typecheck
+bun test
+bun run build
 ```
