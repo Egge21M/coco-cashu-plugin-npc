@@ -11,7 +11,7 @@ describe("NPCPlugin (manual)", () => {
     });
 
     const { calls, ctx } = createMockContext();
-    plugin.onInit(ctx as Parameters<typeof plugin.onInit>[0]);
+    plugin.onInit(ctx as unknown as Parameters<typeof plugin.onInit>[0]);
     plugin.onReady();
 
     (plugin as unknown as { npcClient: unknown }).npcClient = {
@@ -34,7 +34,7 @@ describe("NPCPlugin (manual)", () => {
     });
 
     const { ctx } = createMockContext();
-    plugin.onInit(ctx as Parameters<typeof plugin.onInit>[0]);
+    plugin.onInit(ctx as unknown as Parameters<typeof plugin.onInit>[0]);
     plugin.onReady();
 
     let calls = 0;
@@ -55,14 +55,14 @@ describe("NPCPlugin (manual)", () => {
     expect(calls).toBeLessThanOrEqual(2);
   });
 
-  it("does nothing before onReady is called", async () => {
+  it("waits for onReady before running manual sync", async () => {
     const sinceStore = new MemorySinceStore(0);
     const plugin = new NPCPlugin("https://npc.example.com", createMockSigner(), {
       sinceStore,
     });
 
     const { ctx } = createMockContext();
-    plugin.onInit(ctx as Parameters<typeof plugin.onInit>[0]);
+    plugin.onInit(ctx as unknown as Parameters<typeof plugin.onInit>[0]);
     // Note: onReady is NOT called
 
     let called = false;
@@ -73,9 +73,22 @@ describe("NPCPlugin (manual)", () => {
       },
     };
 
-    await plugin.sync();
+    let settled = false;
+    const syncPromise = plugin.sync().then(() => {
+      settled = true;
+    });
+
+    await Promise.resolve();
 
     expect(called).toBe(false);
+    expect(settled).toBe(false);
+
+    plugin.onReady();
+
+    await syncPromise;
+
+    expect(called).toBe(true);
+    expect(settled).toBe(true);
   });
 
   it("does nothing after shutdown", async () => {
@@ -85,7 +98,7 @@ describe("NPCPlugin (manual)", () => {
     });
 
     const { ctx } = createMockContext();
-    plugin.onInit(ctx as Parameters<typeof plugin.onInit>[0]);
+    plugin.onInit(ctx as unknown as Parameters<typeof plugin.onInit>[0]);
     plugin.onReady();
 
     let calls = 0;

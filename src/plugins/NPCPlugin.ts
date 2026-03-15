@@ -105,6 +105,7 @@ export class NPCPlugin implements Plugin<typeof requiredServices> {
   private wsReconnectTimer?: ReturnType<typeof setTimeout>;
   private ctx?: PluginContext<typeof requiredServices>;
   private isShuttingDown = false;
+  private readyWaiters: Array<() => void> = [];
 
   /**
    * Creates a new NPCPlugin instance.
@@ -158,7 +159,11 @@ export class NPCPlugin implements Plugin<typeof requiredServices> {
     this.ctx = ctx;
     ctx.registerExtension(
       "npc",
-      new PluginApi(ctx.services.paymentRequestService, this.npcClient),
+      new PluginApi(
+        ctx.services.paymentRequestService,
+        this.npcClient,
+        this.sync.bind(this),
+      ),
     );
     return async () => {
       await this.shutdown();
@@ -171,6 +176,8 @@ export class NPCPlugin implements Plugin<typeof requiredServices> {
    */
   onReady(): void {
     this.isReady = true;
+    this.resolveReadyWaiters();
+
     const ctx = this.ctx;
     if (!ctx) return;
 
@@ -190,6 +197,9 @@ export class NPCPlugin implements Plugin<typeof requiredServices> {
    * @returns Promise that resolves when the sync completes
    */
   async sync(): Promise<void> {
+    const isReady = await this.waitUntilReady();
+    if (!isReady) return;
+
     await this.requestSync("manual");
   }
 
@@ -199,6 +209,7 @@ export class NPCPlugin implements Plugin<typeof requiredServices> {
    */
   async shutdown(): Promise<void> {
     this.isShuttingDown = true;
+    this.resolveReadyWaiters();
     this.teardown();
 
     // Wait for in-flight sync to complete
@@ -223,6 +234,26 @@ export class NPCPlugin implements Plugin<typeof requiredServices> {
     }
 
     this.disposeWebSocketSubscription();
+  }
+
+  private async waitUntilReady(): Promise<boolean> {
+    if (this.isReady) return true;
+    if (this.isShuttingDown) return false;
+
+    await new Promise<void>((resolve) => {
+      this.readyWaiters.push(resolve);
+    });
+
+    return this.isReady && !this.isShuttingDown;
+  }
+
+  private resolveReadyWaiters(): void {
+    const waiters = this.readyWaiters;
+    this.readyWaiters = [];
+
+    for (const resolve of waiters) {
+      resolve();
+    }
   }
 
   private disposeWebSocketSubscription(): void {

@@ -11,15 +11,21 @@ export type SetUsernameResult =
 export class PluginApi {
   private prService: PaymentRequestService;
   private client: NPCClient;
+  private syncQuotes: () => Promise<void>;
 
   /**
    * Creates a plugin API wrapper around payment and NPC clients.
    * @param prService Service for handling Cashu payment requests.
    * @param client NPC client used for API calls.
    */
-  constructor(prService: PaymentRequestService, client: NPCClient) {
+  constructor(
+    prService: PaymentRequestService,
+    client: NPCClient,
+    syncQuotes: () => Promise<void>,
+  ) {
     this.prService = prService;
     this.client = client;
+    this.syncQuotes = syncQuotes;
   }
 
   /**
@@ -78,5 +84,12 @@ export class PluginApi {
    */
   async getQuotesSince(sinceUnix: number) {
     return this.client.getQuotesSince(sinceUnix);
+  }
+
+  /**
+   * Triggers a plugin sync cycle through the host integration.
+   */
+  async sync(): Promise<void> {
+    await this.syncQuotes();
   }
 }
