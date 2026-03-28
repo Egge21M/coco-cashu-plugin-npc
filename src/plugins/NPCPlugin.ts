@@ -15,13 +15,22 @@ import {
 import { PluginApi } from "../PluginApi";
 
 const requiredServices = [
-  "mintQuoteService",
+  "mintOperationService",
   "mintService",
   "paymentRequestService",
 ] as const;
 
 /** Trigger types for sync operations */
 type SyncTrigger = "manual" | "websocket" | "interval";
+
+type QuoteSyncStatus = "imported" | "skipped" | "failed";
+
+interface QuoteSyncResult {
+  mintUrl: string;
+  quoteId: string;
+  paidAt: number;
+  status: QuoteSyncStatus;
+}
 
 /** Default WebSocket reconnection settings */
 const WEBSOCKET_DEFAULTS = {
@@ -82,7 +91,7 @@ export interface NPCPluginStatus {
  * NPubCash plugin for coco-cashu-core.
  *
  * This plugin bridges an NPubCash server with the coco-cashu wallet,
- * polling for newly paid quotes and forwarding them to the mint quote service.
+ * polling for newly paid quotes and forwarding them to the mint operation service.
  */
 export class NPCPlugin implements Plugin<typeof requiredServices> {
   readonly name = "npc";
@@ -369,7 +378,7 @@ export class NPCPlugin implements Plugin<typeof requiredServices> {
         do {
           this.hasPendingUpdate = false;
           await this.syncPaidQuotesOnce({
-            mintQuoteService: ctx.services.mintQuoteService,
+            mintOperationService: ctx.services.mintOperationService,
             mintService: ctx.services.mintService,
             trigger,
           });
@@ -389,15 +398,15 @@ export class NPCPlugin implements Plugin<typeof requiredServices> {
   }
 
   private async syncPaidQuotesOnce(options: {
-    mintQuoteService: PluginContext<
+    mintOperationService: PluginContext<
       typeof requiredServices
-    >["services"]["mintQuoteService"];
+    >["services"]["mintOperationService"];
     mintService: PluginContext<
       typeof requiredServices
     >["services"]["mintService"];
     trigger: SyncTrigger;
   }): Promise<void> {
-    const { mintQuoteService, mintService, trigger } = options;
+    const { mintOperationService, mintService, trigger } = options;
     const since = await this.sinceStore.get();
 
     this.logger?.debug?.(formatLogMessage("Starting sync", { since, trigger }));
@@ -411,8 +420,14 @@ export class NPCPlugin implements Plugin<typeof requiredServices> {
 
     // Validate and filter quotes
     const quotes: NPCQuote[] = [];
+    let staleQuoteCount = 0;
     for (const raw of rawQuotes) {
       if (isValidQuote(raw)) {
+        if (raw.paidAt <= since) {
+          staleQuoteCount++;
+          continue;
+        }
+
         if (isValidUrl(raw.mintUrl)) {
           quotes.push(raw);
         } else {
@@ -432,10 +447,29 @@ export class NPCPlugin implements Plugin<typeof requiredServices> {
       }
     }
 
+    if (staleQuoteCount > 0) {
+      this.logger?.debug?.(
+        formatLogMessage("Skipped already-processed quotes", {
+          count: staleQuoteCount,
+          since,
+        }),
+      );
+    }
+
     if (quotes.length === 0) {
       this.logger?.debug?.("No valid quotes after filtering");
       return;
     }
+
+    quotes.sort((a, b) => {
+      if (a.paidAt !== b.paidAt) {
+        return a.paidAt - b.paidAt;
+      }
+      if (a.quoteId !== b.quoteId) {
+        return a.quoteId.localeCompare(b.quoteId);
+      }
+      return a.mintUrl.localeCompare(b.mintUrl);
+    });
 
     // Group quotes by mintUrl
     const mintUrlToQuotes = new Map<string, NPCQuote[]>();
@@ -449,56 +483,161 @@ export class NPCPlugin implements Plugin<typeof requiredServices> {
     }
 
     // Process each mint
-    await Promise.all(
+    const mintResults = await Promise.all(
       Array.from(mintUrlToQuotes.entries()).map(async ([mintUrl, list]) => {
+        const results: QuoteSyncResult[] = [];
+        const transformedQuotes = list.map((quote) => ({
+          ...quote,
+          unit: QUOTE_DEFAULTS.UNIT,
+          expiry: quote.expiresAt,
+          state: QUOTE_DEFAULTS.STATE_PAID,
+          quote: quote.quoteId,
+          request: quote.request ?? "",
+        }));
+
         try {
           await mintService.addMintByUrl(mintUrl, { trusted: true });
-
-          const transformedQuotes = list.map((quote) => ({
-            ...quote,
-            unit: QUOTE_DEFAULTS.UNIT,
-            expiry: quote.expiresAt,
-            state: QUOTE_DEFAULTS.STATE_PAID,
-            quote: quote.quoteId,
-            request: quote.request ?? "",
-          }));
-
-          await mintQuoteService.addExistingMintQuotes(
-            mintUrl,
-            transformedQuotes,
-          );
-
-          this.logger?.debug?.(
-            formatLogMessage("Processed quotes for mint", {
-              mintUrl,
-              count: list.length,
-            }),
-          );
         } catch (err) {
           this.logger?.error?.(
-            formatLogMessage("Failed to process quotes for mint", {
+            formatLogMessage("Failed to add trusted mint for quotes", {
               err: String(err),
               mintUrl,
               quoteCount: list.length,
             }),
           );
-          throw err;
+          for (const quote of list) {
+            results.push({
+              mintUrl,
+              quoteId: quote.quoteId,
+              paidAt: quote.paidAt,
+              status: "failed",
+            });
+          }
+          return results;
         }
+
+        for (let i = 0; i < transformedQuotes.length; i++) {
+          const transformedQuote = transformedQuotes[i];
+          if (!transformedQuote) {
+            continue;
+          }
+
+          const existing = await mintOperationService.getOperationByQuote(
+            mintUrl,
+            transformedQuote.quote,
+          );
+
+          if (
+            existing &&
+            existing.state !== "init" &&
+            existing.state !== "pending"
+          ) {
+            results.push({
+              mintUrl,
+              quoteId: transformedQuote.quoteId,
+              paidAt: transformedQuote.paidAt,
+              status: "skipped",
+            });
+            this.logger?.debug?.(
+              formatLogMessage("Skipping already-tracked quote", {
+                mintUrl,
+                quoteId: transformedQuote.quoteId,
+                operationId: existing.id,
+                state: existing.state,
+              }),
+            );
+            continue;
+          }
+
+          try {
+            await mintOperationService.importQuote(mintUrl, transformedQuote);
+            results.push({
+              mintUrl,
+              quoteId: transformedQuote.quoteId,
+              paidAt: transformedQuote.paidAt,
+              status: "imported",
+            });
+          } catch (err) {
+            results.push({
+              mintUrl,
+              quoteId: transformedQuote.quoteId,
+              paidAt: transformedQuote.paidAt,
+              status: "failed",
+            });
+            this.logger?.error?.(
+              formatLogMessage("Failed to import quote", {
+                err: String(err),
+                mintUrl,
+                quoteId: transformedQuote.quoteId,
+              }),
+            );
+          }
+        }
+
+        this.logger?.debug?.(
+          formatLogMessage("Processed quotes for mint", {
+            mintUrl,
+            count: list.length,
+            imported: results.filter((result) => result.status === "imported")
+              .length,
+            skipped: results.filter((result) => result.status === "skipped")
+              .length,
+            failed: results.filter((result) => result.status === "failed")
+              .length,
+          }),
+        );
+
+        return results;
       }),
     );
 
-    // Update the since timestamp
-    const latestTimestamp = quotes.reduce(
-      (max, q) => Math.max(max, q.paidAt),
-      since,
-    );
+    const quoteResults = mintResults.flat();
+    const failedPaidAt = quoteResults
+      .filter((result) => result.status === "failed")
+      .reduce<number | undefined>((min, result) => {
+        if (min === undefined) {
+          return result.paidAt;
+        }
+        return Math.min(min, result.paidAt);
+      }, undefined);
 
-    if (latestTimestamp > since) {
-      await this.sinceStore.set(latestTimestamp);
+    let safeSince = since;
+    for (const result of quoteResults) {
+      if (failedPaidAt !== undefined && result.paidAt >= failedPaidAt) {
+        continue;
+      }
+      safeSince = Math.max(safeSince, result.paidAt);
+    }
+
+    // Update the since timestamp
+    if (safeSince > since) {
+      await this.sinceStore.set(safeSince);
       this.logger?.debug?.(
         formatLogMessage("Updated since timestamp", {
           oldSince: since,
-          newSince: latestTimestamp,
+          newSince: safeSince,
+        }),
+      );
+    }
+
+    const importedCount = quoteResults.filter(
+      (result) => result.status === "imported",
+    ).length;
+    const skippedCount = quoteResults.filter(
+      (result) => result.status === "skipped",
+    ).length;
+    const failedCount = quoteResults.filter(
+      (result) => result.status === "failed",
+    ).length;
+
+    if (failedCount > 0) {
+      this.logger?.warn?.(
+        formatLogMessage("Sync completed with quote failures", {
+          trigger,
+          imported: importedCount,
+          skipped: skippedCount,
+          failed: failedCount,
+          safeSince,
         }),
       );
     }

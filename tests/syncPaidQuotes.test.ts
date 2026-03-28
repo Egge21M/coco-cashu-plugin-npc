@@ -6,7 +6,7 @@ describe("NPCPlugin sync mapping", () => {
   it("groups quotes by mintUrl, forwards to services, and updates since", async () => {
     const calls = {
       addMintByUrl: [] as string[],
-      addExisting: [] as { url: string; list: unknown[] }[],
+      importQuote: [] as { url: string; quote: unknown }[],
       setSince: [] as number[],
     };
 
@@ -32,9 +32,10 @@ describe("NPCPlugin sync mapping", () => {
             calls.addMintByUrl.push(url);
           },
         },
-        mintQuoteService: {
-          addExistingMintQuotes: async (url: string, list: unknown[]) => {
-            calls.addExisting.push({ url, list });
+        mintOperationService: {
+          getOperationByQuote: async () => undefined,
+          importQuote: async (url: string, quote: unknown) => {
+            calls.importQuote.push({ url, quote });
           },
         },
         paymentRequestService: {},
@@ -57,16 +58,14 @@ describe("NPCPlugin sync mapping", () => {
       "https://mint.b",
     ]);
 
-    const groupA = calls.addExisting.find((g) => g.url === "https://mint.a");
-    const groupB = calls.addExisting.find((g) => g.url === "https://mint.b");
+    const groupA = calls.importQuote.filter((g) => g.url === "https://mint.a");
+    const groupB = calls.importQuote.filter((g) => g.url === "https://mint.b");
 
-    expect(groupA).toBeDefined();
-    expect(groupB).toBeDefined();
-    expect((groupA?.list ?? []).length).toBe(2);
-    expect((groupB?.list ?? []).length).toBe(1);
+    expect(groupA.length).toBe(2);
+    expect(groupB.length).toBe(1);
 
     // Check transformed quote structure
-    const firstQuote = (groupA?.list ?? [])[0] as Record<string, unknown>;
+    const firstQuote = groupA[0]?.quote as Record<string, unknown>;
     expect(firstQuote.unit).toBe("sat");
     expect(firstQuote.state).toBe("PAID");
     expect(firstQuote.expiry).toBe(firstQuote.expiresAt);
@@ -96,8 +95,9 @@ describe("NPCPlugin sync mapping", () => {
     const ctx = {
       services: {
         mintService: { addMintByUrl: async () => {} },
-        mintQuoteService: {
-          addExistingMintQuotes: async () => {},
+        mintOperationService: {
+          getOperationByQuote: async () => undefined,
+          importQuote: async () => {},
         },
         paymentRequestService: {},
       },
@@ -140,15 +140,16 @@ describe("NPCPlugin sync mapping", () => {
     );
 
     const calls = {
-      addExisting: [] as { url: string; list: unknown[] }[],
+      importQuote: [] as { url: string; quote: unknown }[],
     };
 
     const ctx = {
       services: {
         mintService: { addMintByUrl: async () => {} },
-        mintQuoteService: {
-          addExistingMintQuotes: async (url: string, list: unknown[]) => {
-            calls.addExisting.push({ url, list });
+        mintOperationService: {
+          getOperationByQuote: async () => undefined,
+          importQuote: async (url: string, quote: unknown) => {
+            calls.importQuote.push({ url, quote });
           },
         },
         paymentRequestService: {},
@@ -179,10 +180,141 @@ describe("NPCPlugin sync mapping", () => {
     await plugin.sync();
 
     // Only the valid quote should be processed
-    expect(calls.addExisting.length).toBe(1);
-    expect((calls.addExisting[0]?.list ?? []).length).toBe(1);
+    expect(calls.importQuote.length).toBe(1);
 
     // Should have logged warnings for invalid quotes
     expect(warnings.length).toBe(2);
+  });
+
+  it("advances since only to the safe watermark and skips already-tracked retries", async () => {
+    const warnings: string[] = [];
+    const errors: string[] = [];
+    const calls = {
+      lookupQuote: [] as string[],
+      importAttempt: [] as string[],
+      importQuote: [] as { url: string; quote: Record<string, unknown> }[],
+      setSince: [] as number[],
+    };
+    const trackedQuotes = new Map<
+      string,
+      { id: string; state: "finalized" | "failed" }
+    >();
+
+    const sinceStore = {
+      current: 100,
+      get: async () => sinceStore.current,
+      set: async (since: number) => {
+        sinceStore.current = since;
+        calls.setSince.push(since);
+      },
+    };
+
+    const plugin = new NPCPlugin(
+      "https://npc.example.com",
+      createMockSigner(),
+      {
+        sinceStore,
+        logger: {
+          warn: (data: unknown) => {
+            warnings.push(String(data));
+          },
+          error: (data: unknown) => {
+            errors.push(String(data));
+          },
+          info: () => {},
+          debug: () => {},
+        },
+      },
+    );
+
+    const ctx = {
+      services: {
+        mintService: {
+          addMintByUrl: async () => {},
+        },
+        mintOperationService: {
+          getOperationByQuote: async (_url: string, quoteId: string) => {
+            calls.lookupQuote.push(quoteId);
+            return trackedQuotes.get(quoteId);
+          },
+          importQuote: async (url: string, quote: unknown) => {
+            const record = quote as Record<string, unknown>;
+            calls.importAttempt.push(String(record.quoteId));
+            if (record.quoteId === "q2") {
+              throw new Error("boom");
+            }
+            trackedQuotes.set(String(record.quoteId), {
+              id: `op-${String(record.quoteId)}`,
+              state: "finalized",
+            });
+            calls.importQuote.push({
+              url,
+              quote: record,
+            });
+          },
+        },
+        paymentRequestService: {},
+      },
+      registerExtension: () => {},
+    };
+
+    plugin.onInit(ctx as Parameters<typeof plugin.onInit>[0]);
+    plugin.onReady();
+
+    (plugin as unknown as { npcClient: unknown }).npcClient = {
+      getQuotesSince: async () => [
+        {
+          mintUrl: "https://mint.a",
+          expiresAt: 1,
+          quoteId: "stale",
+          paidAt: 100,
+          amount: 25,
+        },
+        {
+          mintUrl: "https://mint.a",
+          expiresAt: 2,
+          quoteId: "q1",
+          paidAt: 110,
+          amount: 100,
+        },
+        {
+          mintUrl: "https://mint.a",
+          expiresAt: 3,
+          quoteId: "q2",
+          paidAt: 150,
+          amount: 200,
+        },
+        {
+          mintUrl: "https://mint.b",
+          expiresAt: 4,
+          quoteId: "q3",
+          paidAt: 200,
+          amount: 300,
+        },
+      ],
+    };
+
+    await plugin.sync();
+
+    expect(calls.importQuote.map((entry) => entry.quote.quoteId)).toEqual([
+      "q1",
+      "q3",
+    ]);
+    expect(calls.importAttempt.toSorted()).toEqual(["q1", "q2", "q3"]);
+    expect(calls.lookupQuote.toSorted()).toEqual(["q1", "q2", "q3"]);
+    expect(calls.setSince).toEqual([110]);
+    expect(warnings.some((message) => message.includes("Sync completed with quote failures"))).toBe(true);
+    expect(errors.some((message) => message.includes("Failed to import quote"))).toBe(true);
+
+    calls.lookupQuote = [];
+    calls.importAttempt = [];
+    calls.importQuote = [];
+
+    await plugin.sync();
+
+    expect(calls.lookupQuote.toSorted()).toEqual(["q2", "q3"]);
+    expect(calls.importAttempt).toEqual(["q2"]);
+    expect(calls.importQuote).toEqual([]);
+    expect(calls.setSince).toEqual([110]);
   });
 });

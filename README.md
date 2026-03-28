@@ -2,7 +2,7 @@
 
 `coco-cashu-plugin-npc` integrates an NPubCash account with `coco-cashu-core`.
 It syncs paid quotes from an NPC server, converts them into coco mint quotes, and
-forwards them through the host's `mintQuoteService`.
+forwards them through the host's `mintOperationService`.
 
 - Polls NPC for paid quotes since a persisted timestamp
 - Optionally listens for realtime websocket updates
@@ -88,7 +88,7 @@ Available methods:
 
 `sync()` uses the same guardrails as scheduled syncing: it waits for `onReady()`,
 batches overlapping calls, respects shutdown, validates quotes, groups by mint,
-and only advances `since` after successful processing.
+and advances `since` only to the highest safe watermark after processing.
 
 ## Sync Behavior
 
@@ -96,17 +96,18 @@ Each sync cycle:
 
 1. Reads the last processed timestamp from `SinceStore`
 2. Fetches paid quotes from NPC with `getQuotesSince(since)`
-3. Filters invalid quotes and invalid mint URLs
+3. Filters out already-processed timestamps, invalid quotes, and invalid mint URLs
 4. Groups valid quotes by `mintUrl`
 5. Adds each mint as trusted and forwards transformed quotes to coco
-6. Advances `since` to the latest processed `paidAt` value
+6. Advances `since` to the highest contiguous `paidAt` watermark with no unresolved failures
 
 Important behaviors:
 
 - overlapping sync requests are serialized
 - interval polling rearms after the current sync finishes
 - websocket failures are cleaned up before reconnect attempts are scheduled
-- `since` only advances after quote processing succeeds
+- already-tracked quotes are skipped safely on retry
+- `since` only advances to a safe watermark before the first unresolved failure
 
 ## Public Exports
 

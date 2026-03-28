@@ -15,7 +15,7 @@ export function createMockSigner(): Signer {
 export function createMockServices() {
   const calls = {
     addMintByUrl: [] as string[],
-    addExisting: [] as { url: string; list: unknown[] }[],
+    importQuote: [] as { url: string; quote: unknown }[],
   };
 
   const services = {
@@ -24,9 +24,10 @@ export function createMockServices() {
         calls.addMintByUrl.push(url);
       },
     },
-    mintQuoteService: {
-      addExistingMintQuotes: async (url: string, list: unknown[]) => {
-        calls.addExisting.push({ url, list });
+    mintOperationService: {
+      getOperationByQuote: async () => undefined,
+      importQuote: async (url: string, quote: unknown) => {
+        calls.importQuote.push({ url, quote });
       },
     },
     paymentRequestService: {},

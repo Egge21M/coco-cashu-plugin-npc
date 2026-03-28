@@ -16,7 +16,7 @@ export interface NPCQuote {
 }
 
 /**
- * Transformed quote ready for mint quote service
+ * Transformed quote ready for the mint operation service
  */
 export interface MintQuote {
   quoteId: string;

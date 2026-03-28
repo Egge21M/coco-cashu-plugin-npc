@@ -56,7 +56,7 @@ describe("PluginApi", () => {
     await extension?.sync();
 
     expect(calls.addMintByUrl).toEqual(["https://mint.a"]);
-    expect(calls.addExisting.length).toBe(1);
+    expect(calls.importQuote.length).toBe(1);
     expect(await sinceStore.get()).toBe(10);
   });
 
