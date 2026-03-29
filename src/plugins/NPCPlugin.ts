@@ -527,11 +527,7 @@ export class NPCPlugin implements Plugin<typeof requiredServices> {
             transformedQuote.quote,
           );
 
-          if (
-            existing &&
-            existing.state !== "init" &&
-            existing.state !== "pending"
-          ) {
+          if (existing && existing.state !== "init") {
             results.push({
               mintUrl,
               quoteId: transformedQuote.quoteId,

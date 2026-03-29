@@ -317,4 +317,103 @@ describe("NPCPlugin sync mapping", () => {
     expect(calls.importQuote).toEqual([]);
     expect(calls.setSince).toEqual([110]);
   });
+
+  it("only reimports quotes with existing init operations", async () => {
+    const calls = {
+      importAttempt: [] as string[],
+      setSince: [] as number[],
+    };
+
+    const sinceStore = {
+      get: async () => 100,
+      set: async (since: number) => {
+        calls.setSince.push(since);
+      },
+    };
+
+    const plugin = new NPCPlugin(
+      "https://npc.example.com",
+      createMockSigner(),
+      {
+        sinceStore,
+      },
+    );
+
+    const existingByQuote = new Map<
+      string,
+      { id: string; state: "init" | "pending" | "executing" | "finalized" | "failed" }
+    >([
+      ["q1", { id: "op-q1", state: "init" }],
+      ["q2", { id: "op-q2", state: "pending" }],
+      ["q3", { id: "op-q3", state: "executing" }],
+      ["q4", { id: "op-q4", state: "finalized" }],
+      ["q5", { id: "op-q5", state: "failed" }],
+    ]);
+
+    const ctx = {
+      services: {
+        mintService: {
+          addMintByUrl: async () => {},
+        },
+        mintOperationService: {
+          getOperationByQuote: async (_url: string, quoteId: string) =>
+            existingByQuote.get(quoteId),
+          importQuote: async (_url: string, quote: unknown) => {
+            const record = quote as Record<string, unknown>;
+            calls.importAttempt.push(String(record.quoteId));
+          },
+        },
+        paymentRequestService: {},
+      },
+      registerExtension: () => {},
+    };
+
+    plugin.onInit(ctx as Parameters<typeof plugin.onInit>[0]);
+    plugin.onReady();
+
+    (plugin as unknown as { npcClient: unknown }).npcClient = {
+      getQuotesSince: async () => [
+        {
+          mintUrl: "https://mint.a",
+          expiresAt: 1,
+          quoteId: "q1",
+          paidAt: 110,
+          amount: 100,
+        },
+        {
+          mintUrl: "https://mint.a",
+          expiresAt: 2,
+          quoteId: "q2",
+          paidAt: 120,
+          amount: 100,
+        },
+        {
+          mintUrl: "https://mint.a",
+          expiresAt: 3,
+          quoteId: "q3",
+          paidAt: 130,
+          amount: 100,
+        },
+        {
+          mintUrl: "https://mint.a",
+          expiresAt: 4,
+          quoteId: "q4",
+          paidAt: 140,
+          amount: 100,
+        },
+        {
+          mintUrl: "https://mint.a",
+          expiresAt: 5,
+          quoteId: "q5",
+          paidAt: 150,
+          amount: 100,
+        },
+      ],
+    };
+
+    await plugin.sync();
+
+    expect(calls.importAttempt).toEqual(["q1"]);
+    expect(calls.setSince).toEqual([150]);
+  });
 });
