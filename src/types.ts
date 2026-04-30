@@ -1,5 +1,7 @@
 import type { Logger } from "coco-cashu-core";
-import type { JWTAuthProvider } from "npubcash-sdk";
+import type { JWTAuthProvider, PaymentRequiredError } from "npubcash-sdk";
+
+import type { SinceStore } from "./sync/sinceStore";
 
 /**
  * Quote data returned from NPubCash API
@@ -37,6 +39,129 @@ export interface MintQuote {
  * with various signing implementations from npubcash-sdk.
  */
 export type Signer = ConstructorParameters<typeof JWTAuthProvider>[1];
+
+export type SetUsernameResult =
+  | { success: true }
+  | {
+      success: false;
+      pr: Omit<PaymentRequiredError["paymentRequest"], "nut26">;
+    };
+
+/**
+ * Options used to add one NPubCash account runtime.
+ */
+export interface AddNPCAccountOptions {
+  id: string;
+  signer: Signer;
+  baseUrl?: string;
+  sinceStore?: SinceStore;
+  syncIntervalMs?: number;
+  useWebsocket?: boolean;
+  autoStart?: boolean;
+}
+
+/**
+ * Persisted metadata for a host-owned NPC account.
+ *
+ * Signer material is intentionally not included.
+ */
+export interface NPCAccountRecord {
+  id: string;
+  baseUrl: string;
+  syncIntervalMs?: number;
+  useWebsocket?: boolean;
+  autoStart: boolean;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/**
+ * Optional host-provided metadata store for account registrations.
+ */
+export interface NPCAccountStore {
+  list(): Promise<NPCAccountRecord[]>;
+  upsert(record: NPCAccountRecord): Promise<void>;
+  remove(accountId: string): Promise<void>;
+}
+
+/**
+ * Creates a per-account SinceStore when one is not supplied explicitly.
+ */
+export type NPCSinceStoreFactory = (
+  accountId: string,
+  baseUrl: string,
+) => SinceStore | Promise<SinceStore>;
+
+/**
+ * Configuration options for NPCPlugin.
+ */
+export interface NPCPluginOptions {
+  /**
+   * Default NPC server URL for accounts that do not provide one.
+   */
+  defaultBaseUrl?: string;
+
+  /**
+   * Optional host-owned store for account metadata.
+   */
+  accountStore?: NPCAccountStore;
+
+  /**
+   * Optional factory for creating account-scoped SinceStore instances.
+   */
+  sinceStoreFactory?: NPCSinceStoreFactory;
+
+  /**
+   * Default interval in milliseconds between sync operations.
+   * If not provided, interval-based syncing is disabled by default.
+   */
+  syncIntervalMs?: number;
+
+  /**
+   * Enable WebSocket subscriptions by default for account runtimes.
+   * @default false
+   */
+  useWebsocket?: boolean;
+
+  /**
+   * Logger instance for debugging and error reporting.
+   */
+  logger?: Logger;
+}
+
+/**
+ * Account runtime status information.
+ */
+export interface NPCAccountStatus {
+  id: string;
+  isReady: boolean;
+  isRunning: boolean;
+  isSyncing: boolean;
+  isWebSocketConnected: boolean;
+  isShutdown: boolean;
+}
+
+/**
+ * Account summary returned by the root extension API.
+ */
+export interface NPCAccountSummary extends NPCAccountStatus {
+  baseUrl: string;
+  autoStart: boolean;
+  syncIntervalMs?: number;
+  useWebsocket: boolean;
+}
+
+/**
+ * Plugin status information.
+ */
+export interface NPCPluginStatus {
+  isInitialized: boolean;
+  isReady: boolean;
+  accountCount: number;
+  runningAccountIds: string[];
+  syncingAccountIds: string[];
+  websocketConnectedAccountIds: string[];
+}
 
 /**
  * Extended logger interface that supports structured logging

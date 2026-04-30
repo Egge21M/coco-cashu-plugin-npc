@@ -1,70 +1,108 @@
 import { getEncodedToken, type PaymentRequestService } from "coco-cashu-core";
-import { PaymentRequiredError, type NPCClient } from "npubcash-sdk";
+import { PaymentRequiredError } from "npubcash-sdk";
 
-export type SetUsernameResult =
-  | { success: true }
-  | {
-      success: false;
-      pr: Omit<PaymentRequiredError["paymentRequest"], "nut26">;
-    };
+import type { NPCAccountRuntime } from "./accounts/NPCAccountRuntime";
+import type { NPCPlugin } from "./plugins/NPCPlugin";
+import type {
+  AddNPCAccountOptions,
+  NPCAccountStatus,
+  NPCAccountSummary,
+  NPCPluginStatus,
+  SetUsernameResult,
+} from "./types";
 
-export class PluginApi {
-  private prService: PaymentRequestService;
-  private client: NPCClient;
-  private syncQuotes: () => Promise<void>;
+/**
+ * Root NPC extension API registered on the host manager.
+ */
+export class NPCPluginApi {
+  private readonly plugin: NPCPlugin;
 
-  /**
-   * Creates a plugin API wrapper around payment and NPC clients.
-   * @param prService Service for handling Cashu payment requests.
-   * @param client NPC client used for API calls.
-   */
+  constructor(plugin: NPCPlugin) {
+    this.plugin = plugin;
+  }
+
+  addAccount(options: AddNPCAccountOptions): Promise<NPCAccountApi> {
+    return this.plugin.addAccount(options);
+  }
+
+  removeAccount(accountId: string): Promise<void> {
+    return this.plugin.removeAccount(accountId);
+  }
+
+  getAccount(accountId: string): NPCAccountApi | undefined {
+    return this.plugin.getAccount(accountId);
+  }
+
+  listAccounts(): NPCAccountSummary[] {
+    return this.plugin.listAccounts();
+  }
+
+  getStatus(): NPCPluginStatus {
+    return this.plugin.getStatus();
+  }
+
+  syncAll(): Promise<void> {
+    return this.plugin.syncAll();
+  }
+
+  shutdownAccount(accountId: string): Promise<void> {
+    return this.plugin.shutdownAccount(accountId);
+  }
+}
+
+/**
+ * Account-scoped NPC API.
+ */
+export class NPCAccountApi {
+  readonly id: string;
+
+  private readonly getPrService: () => PaymentRequestService;
+  private readonly runtime: NPCAccountRuntime;
+
   constructor(
-    prService: PaymentRequestService,
-    client: NPCClient,
-    syncQuotes: () => Promise<void>,
+    getPrService: () => PaymentRequestService,
+    runtime: NPCAccountRuntime,
   ) {
-    this.prService = prService;
-    this.client = client;
-    this.syncQuotes = syncQuotes;
+    this.id = runtime.id;
+    this.getPrService = getPrService;
+    this.runtime = runtime;
   }
 
   /**
-   * Fetches NPC server metadata and capability information.
+   * Fetches NPC server metadata and account information.
    */
   async getInfo() {
-    return this.client.getInfo();
+    return this.runtime.client.getInfo();
   }
 
   /**
-   * Sets the user's NPC username, handling payment-required flows when needed.
-   * @param username Desired username to set.
-   * @param attemptPayment If true, automatically attempt to pay if payment is required.
-   * @returns Result indicating success or payment instructions.
+   * Sets the account username, handling payment-required flows when requested.
    */
   async setUsername(
     username: string,
     attemptPayment?: boolean,
   ): Promise<SetUsernameResult> {
     try {
-      await this.client.setUsername(username);
+      await this.runtime.client.setUsername(username);
       return { success: true };
     } catch (e) {
       if (!(e instanceof PaymentRequiredError)) {
-        throw e; // Re-throw unexpected errors
+        throw e;
       }
       const creq = e.paymentRequest.toEncodedRequest();
       if (attemptPayment) {
-        const cocoReq = await this.prService.processPaymentRequest(creq);
+        const prService = this.getPrService();
+        const cocoReq = await prService.processPaymentRequest(creq);
         if (!cocoReq.matchingMints[0]) {
           return { success: false, pr: e.paymentRequest };
         }
-        const tx = await this.prService.preparePaymentRequestTransaction(
+        const tx = await prService.preparePaymentRequestTransaction(
           cocoReq.matchingMints[0],
           cocoReq,
         );
-        await this.prService.handleInbandPaymentRequest(tx, async (token) => {
+        await prService.handleInbandPaymentRequest(tx, async (token) => {
           const tokenString = getEncodedToken(token);
-          await this.client.setUsername(username, tokenString);
+          await this.runtime.client.setUsername(username, tokenString);
         });
         return {
           success: true,
@@ -78,18 +116,28 @@ export class PluginApi {
   }
 
   /**
-   * Retrieves NPC quotes created since a given Unix timestamp.
-   * This will only display the quotes. It will not automatically handle them through coco.
-   * @param sinceUnix Unix timestamp (seconds) to query from.
+   * Retrieves raw NPC quotes created since a Unix timestamp.
    */
   async getQuotesSince(sinceUnix: number) {
-    return this.client.getQuotesSince(sinceUnix);
+    return this.runtime.client.getQuotesSince(sinceUnix);
   }
 
   /**
-   * Triggers a plugin sync cycle through the host integration.
+   * Triggers this account's quote sync cycle.
    */
   async sync(): Promise<void> {
-    await this.syncQuotes();
+    await this.runtime.sync();
+  }
+
+  start(): void {
+    this.runtime.start();
+  }
+
+  stop(): Promise<void> {
+    return this.runtime.stop();
+  }
+
+  getStatus(): NPCAccountStatus {
+    return this.runtime.getStatus();
   }
 }

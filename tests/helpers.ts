@@ -1,3 +1,6 @@
+import type { NPCAccountRuntime } from "../src/accounts/NPCAccountRuntime";
+import { NPCPlugin } from "../src/plugins/NPCPlugin";
+import { MemorySinceStore } from "../src/sync/sinceStore";
 import type { Signer } from "../src/types";
 
 /**
@@ -47,6 +50,57 @@ export function createMockContext() {
       services,
       registerExtension: () => {},
     },
+  };
+}
+
+export function getAccountRuntime(
+  plugin: NPCPlugin,
+  accountId = "account-1",
+): NPCAccountRuntime {
+  const accounts = (
+    plugin as unknown as {
+      accounts: Map<string, { runtime: NPCAccountRuntime }>;
+    }
+  ).accounts;
+  const runtime = accounts.get(accountId)?.runtime;
+  if (!runtime) {
+    throw new Error(`Missing runtime for ${accountId}`);
+  }
+  return runtime;
+}
+
+export async function createReadyAccount(options?: {
+  accountId?: string;
+  baseUrl?: string;
+  syncIntervalMs?: number;
+  useWebsocket?: boolean;
+  autoStart?: boolean;
+}) {
+  const accountId = options?.accountId ?? "account-1";
+  const sinceStore = new MemorySinceStore(0);
+  const plugin = new NPCPlugin();
+  const { calls, ctx } = createMockContext();
+
+  plugin.onInit(ctx as unknown as Parameters<typeof plugin.onInit>[0]);
+  const account = await plugin.addAccount({
+    id: accountId,
+    signer: createMockSigner(),
+    baseUrl: options?.baseUrl ?? "https://npc.example.com",
+    sinceStore,
+    syncIntervalMs: options?.syncIntervalMs,
+    useWebsocket: options?.useWebsocket,
+    autoStart: options?.autoStart,
+  });
+  plugin.onReady();
+
+  return {
+    account,
+    accountId,
+    calls,
+    ctx,
+    plugin,
+    runtime: getAccountRuntime(plugin, accountId),
+    sinceStore,
   };
 }
 

@@ -1,46 +1,108 @@
 import { describe, it, expect } from "bun:test";
+
 import { NPCPlugin } from "../src/plugins/NPCPlugin";
 import { MemorySinceStore } from "../src/sync/sinceStore";
-import { createMockSigner, createMockContext, stubTimeout } from "./helpers";
+import {
+  createMockContext,
+  createMockSigner,
+  createReadyAccount,
+  getAccountRuntime,
+  stubTimeout,
+} from "./helpers";
 
-describe("NPCPlugin (interval)", () => {
-  it("arms resettable timer, runs sync, and cleans up on shutdown", async () => {
-    const sinceStore = new MemorySinceStore(0);
-    const plugin = new NPCPlugin("https://npc.example.com", createMockSigner(), {
-      sinceStore,
+describe("NPCPlugin (registry)", () => {
+  it("registers with no account", () => {
+    const plugin = new NPCPlugin();
+    const { ctx } = createMockContext();
+
+    expect(() => {
+      plugin.onInit(ctx as unknown as Parameters<typeof plugin.onInit>[0]);
+      plugin.onReady();
+    }).not.toThrow();
+
+    expect(plugin.getStatus().accountCount).toBe(0);
+  });
+
+  it("registers the root extension on init", () => {
+    const plugin = new NPCPlugin();
+    const { services } = createMockContext().ctx;
+    let extension: unknown;
+
+    plugin.onInit({
+      services,
+      registerExtension: (name: string, api: unknown) => {
+        expect(name).toBe("npc");
+        extension = api;
+      },
+    } as unknown as Parameters<typeof plugin.onInit>[0]);
+
+    expect(extension).toBeDefined();
+    expect(typeof (extension as { addAccount?: unknown }).addAccount).toBe(
+      "function",
+    );
+  });
+
+  it("starts previously added auto-start accounts on ready", async () => {
+    const plugin = new NPCPlugin();
+    const { ctx } = createMockContext();
+    plugin.onInit(ctx as unknown as Parameters<typeof plugin.onInit>[0]);
+
+    await plugin.addAccount({
+      id: "account-1",
+      signer: createMockSigner(),
+      baseUrl: "https://npc.example.com",
       syncIntervalMs: 1000,
     });
 
-    const { calls, ctx } = createMockContext();
-    const cleanup = plugin.onInit(ctx as unknown as Parameters<typeof plugin.onInit>[0]);
+    const t = stubTimeout();
+    try {
+      plugin.onReady();
 
-    // Replace internal npc client with stub
-    (plugin as unknown as { npcClient: unknown }).npcClient = {
+      expect(t.timeouts.length).toBe(1);
+      expect(plugin.getStatus().runningAccountIds).toEqual(["account-1"]);
+    } finally {
+      t.restore();
+    }
+  });
+});
+
+describe("NPCPlugin (interval)", () => {
+  it("arms resettable timer, runs sync, and cleans up on shutdown", async () => {
+    const { account, calls, plugin, runtime, sinceStore } =
+      await createReadyAccount({
+        autoStart: false,
+        syncIntervalMs: 1000,
+      });
+
+    (runtime as unknown as { client: unknown }).client = {
       getQuotesSince: async () => [
-        { mintUrl: "https://mint.a", expiresAt: 1, quoteId: "qa", paidAt: 10, amount: 100 },
+        {
+          mintUrl: "https://mint.a",
+          expiresAt: 1,
+          quoteId: "qa",
+          paidAt: 10,
+          amount: 100,
+        },
       ],
     };
 
     const t = stubTimeout();
     try {
-      plugin.onReady();
+      account.start();
       expect(t.timeouts.length).toBe(1);
 
-      // Run one interval tick - triggers sync asynchronously
       t.timeouts[0]!.fn();
 
-      // Wait for the sync to complete by polling runPromise
-      const pluginInternal = plugin as unknown as { runPromise?: Promise<void> };
-      while (pluginInternal.runPromise) {
-        await pluginInternal.runPromise;
+      const runtimeInternal = runtime as unknown as { runPromise?: Promise<void> };
+      while (runtimeInternal.runPromise) {
+        await runtimeInternal.runPromise;
       }
 
       expect(calls.addMintByUrl).toEqual(["https://mint.a"]);
       expect(calls.importQuote.length).toBe(1);
       expect(await sinceStore.get()).toBe(10);
 
-      // Cleanup clears timeout
-      await cleanup();
+      await plugin.shutdown();
       expect(t.wasCleared()).toBe(true);
     } finally {
       t.restore();
@@ -48,25 +110,20 @@ describe("NPCPlugin (interval)", () => {
   });
 
   it("guards against overlapping timer triggers", async () => {
-    const sinceStore = new MemorySinceStore(0);
-    const plugin = new NPCPlugin("https://npc.example.com", createMockSigner(), {
-      sinceStore,
+    const { account, runtime } = await createReadyAccount({
+      autoStart: false,
       syncIntervalMs: 1000,
     });
-
-    const { ctx } = createMockContext();
-    const cleanup = plugin.onInit(ctx as unknown as Parameters<typeof plugin.onInit>[0]);
 
     let concurrentCalls = 0;
     let maxConcurrent = 0;
     let totalCalls = 0;
 
-    (plugin as unknown as { npcClient: unknown }).npcClient = {
+    (runtime as unknown as { client: unknown }).client = {
       getQuotesSince: async () => {
         concurrentCalls++;
         totalCalls++;
         maxConcurrent = Math.max(maxConcurrent, concurrentCalls);
-        // Small delay to allow potential concurrent calls
         await Promise.resolve();
         concurrentCalls--;
         return [];
@@ -75,41 +132,32 @@ describe("NPCPlugin (interval)", () => {
 
     const t = stubTimeout();
     try {
-      plugin.onReady();
+      account.start();
       expect(t.timeouts.length).toBe(1);
 
-      // Trigger twice quickly
       t.timeouts[0]!.fn();
       t.timeouts[0]!.fn();
 
-      // Wait for syncs to complete
-      const pluginInternal = plugin as unknown as { runPromise?: Promise<void> };
-      while (pluginInternal.runPromise) {
-        await pluginInternal.runPromise;
+      const runtimeInternal = runtime as unknown as { runPromise?: Promise<void> };
+      while (runtimeInternal.runPromise) {
+        await runtimeInternal.runPromise;
       }
 
-      // Key assertion: syncs should NEVER run concurrently
       expect(maxConcurrent).toBe(1);
-      // The pending update mechanism may trigger 1-2 syncs, but not concurrent
       expect(totalCalls).toBeLessThanOrEqual(2);
-      await cleanup();
     } finally {
       t.restore();
     }
   });
 
   it("rearms the interval after sync completion", async () => {
-    const sinceStore = new MemorySinceStore(0);
-    const plugin = new NPCPlugin("https://npc.example.com", createMockSigner(), {
-      sinceStore,
+    const { account, runtime } = await createReadyAccount({
+      autoStart: false,
       syncIntervalMs: 1000,
     });
 
-    const { ctx } = createMockContext();
-    const cleanup = plugin.onInit(ctx as unknown as Parameters<typeof plugin.onInit>[0]);
-
     let resolveSync: (() => void) | undefined;
-    (plugin as unknown as { npcClient: unknown }).npcClient = {
+    (runtime as unknown as { client: unknown }).client = {
       getQuotesSince: async () => {
         await new Promise<void>((resolve) => {
           resolveSync = resolve;
@@ -120,7 +168,7 @@ describe("NPCPlugin (interval)", () => {
 
     const t = stubTimeout();
     try {
-      plugin.onReady();
+      account.start();
       expect(t.timeouts.length).toBe(1);
 
       t.timeouts[0]!.fn();
@@ -130,13 +178,12 @@ describe("NPCPlugin (interval)", () => {
 
       resolveSync?.();
 
-      const pluginInternal = plugin as unknown as { runPromise?: Promise<void> };
-      while (pluginInternal.runPromise) {
-        await pluginInternal.runPromise;
+      const runtimeInternal = runtime as unknown as { runPromise?: Promise<void> };
+      while (runtimeInternal.runPromise) {
+        await runtimeInternal.runPromise;
       }
 
       expect(t.timeouts.length).toBe(2);
-      await cleanup();
     } finally {
       t.restore();
     }
@@ -145,17 +192,15 @@ describe("NPCPlugin (interval)", () => {
 
 describe("NPCPlugin (websocket)", () => {
   it("disposes the failed subscription before reconnecting", async () => {
-    const plugin = new NPCPlugin("https://npc.example.com", createMockSigner(), {
+    const { account, plugin, runtime } = await createReadyAccount({
+      autoStart: false,
       useWebsocket: true,
     });
-
-    const { ctx } = createMockContext();
-    const cleanup = plugin.onInit(ctx as unknown as Parameters<typeof plugin.onInit>[0]);
 
     const unsubscribeCalls: number[] = [];
     const subscriptions: Array<{ onError?: (error: unknown) => void }> = [];
 
-    (plugin as unknown as { npcClient: unknown }).npcClient = {
+    (runtime as unknown as { client: unknown }).client = {
       subscribe: (
         _onUpdate: (quoteId: string) => void,
         onError?: (error: unknown) => void,
@@ -172,7 +217,7 @@ describe("NPCPlugin (websocket)", () => {
 
     const t = stubTimeout();
     try {
-      plugin.onReady();
+      account.start();
       expect(subscriptions.length).toBe(1);
 
       subscriptions[0]?.onError?.("boom");
@@ -183,7 +228,7 @@ describe("NPCPlugin (websocket)", () => {
       t.timeouts[0]!.fn();
       expect(subscriptions.length).toBe(2);
 
-      await cleanup();
+      await plugin.shutdown();
       expect(unsubscribeCalls[0]).toBe(1);
       expect(unsubscribeCalls[1]).toBe(1);
     } finally {
@@ -193,65 +238,81 @@ describe("NPCPlugin (websocket)", () => {
 });
 
 describe("NPCPlugin (constructor validation)", () => {
-  it("throws on invalid baseUrl", () => {
+  it("throws on invalid defaultBaseUrl", () => {
     expect(() => {
-      new NPCPlugin("not-a-url", createMockSigner());
-    }).toThrow("Invalid baseUrl");
+      new NPCPlugin({ defaultBaseUrl: "not-a-url" });
+    }).toThrow("Invalid defaultBaseUrl");
   });
 
-  it("accepts valid baseUrl", () => {
+  it("accepts absent defaultBaseUrl", () => {
     expect(() => {
-      new NPCPlugin("https://valid.example.com", createMockSigner());
+      new NPCPlugin();
+    }).not.toThrow();
+  });
+
+  it("accepts valid defaultBaseUrl", () => {
+    expect(() => {
+      new NPCPlugin({ defaultBaseUrl: "https://valid.example.com" });
     }).not.toThrow();
   });
 });
 
 describe("NPCPlugin (status)", () => {
   it("returns correct initial status", () => {
-    const plugin = new NPCPlugin("https://npc.example.com", createMockSigner());
+    const plugin = new NPCPlugin();
     const status = plugin.getStatus();
 
     expect(status.isInitialized).toBe(false);
     expect(status.isReady).toBe(false);
-    expect(status.isSyncing).toBe(false);
-    expect(status.isWebSocketConnected).toBe(false);
+    expect(status.accountCount).toBe(0);
+    expect(status.runningAccountIds).toEqual([]);
+    expect(status.syncingAccountIds).toEqual([]);
+    expect(status.websocketConnectedAccountIds).toEqual([]);
   });
 
-  it("updates status after init and ready", () => {
-    const plugin = new NPCPlugin("https://npc.example.com", createMockSigner());
+  it("updates status after init, account add, and ready", async () => {
+    const plugin = new NPCPlugin();
     const { ctx } = createMockContext();
 
     plugin.onInit(ctx as unknown as Parameters<typeof plugin.onInit>[0]);
     expect(plugin.getStatus().isInitialized).toBe(true);
     expect(plugin.getStatus().isReady).toBe(false);
 
+    await plugin.addAccount({
+      id: "account-1",
+      signer: createMockSigner(),
+      baseUrl: "https://npc.example.com",
+    });
+
     plugin.onReady();
     expect(plugin.getStatus().isReady).toBe(true);
+    expect(plugin.getStatus().accountCount).toBe(1);
+    expect(plugin.getStatus().runningAccountIds).toEqual(["account-1"]);
   });
 });
 
 describe("NPCPlugin (shutdown)", () => {
   it("gracefully shuts down and waits for in-flight sync", async () => {
     const sinceStore = new MemorySinceStore(0);
-    const plugin = new NPCPlugin("https://npc.example.com", createMockSigner(), {
-      sinceStore,
-    });
-
+    const plugin = new NPCPlugin();
     const { ctx } = createMockContext();
     plugin.onInit(ctx as unknown as Parameters<typeof plugin.onInit>[0]);
+    const account = await plugin.addAccount({
+      id: "account-1",
+      signer: createMockSigner(),
+      baseUrl: "https://npc.example.com",
+      sinceStore,
+    });
     plugin.onReady();
 
     let syncStarted = false;
     let syncCompleted = false;
+    const runtime = getAccountRuntime(plugin);
 
-    (plugin as unknown as { npcClient: unknown }).npcClient = {
+    (runtime as unknown as { client: unknown }).client = {
       getQuotesSince: async () => {
         syncStarted = true;
-        // Small delay to simulate async work
         await new Promise<void>((resolve) => {
-          const id = setTimeout(() => resolve(), 10);
-          // Ensure native setTimeout is used
-          if (typeof id === "number") clearTimeout(id);
           setTimeout(() => resolve(), 10);
         });
         syncCompleted = true;
@@ -259,16 +320,10 @@ describe("NPCPlugin (shutdown)", () => {
       },
     };
 
-    // Start sync
-    const syncPromise = plugin.sync();
-
-    // Give sync a moment to start
+    const syncPromise = account.sync();
     await new Promise((r) => setTimeout(r, 5));
-
-    // Start shutdown (should wait for sync)
     const shutdownPromise = plugin.shutdown();
 
-    // Both should complete
     await Promise.all([syncPromise, shutdownPromise]);
 
     expect(syncStarted).toBe(true);

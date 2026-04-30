@@ -1,8 +1,42 @@
 import { describe, it, expect } from "bun:test";
-import { NPCPlugin } from "../src/plugins/NPCPlugin";
-import { createMockSigner, makeQuotes } from "./helpers";
 
-describe("NPCPlugin sync mapping", () => {
+import { NPCPlugin } from "../src/plugins/NPCPlugin";
+import {
+  createMockSigner,
+  getAccountRuntime,
+  makeQuotes,
+} from "./helpers";
+
+function createContext(calls: {
+  addMintByUrl?: string[];
+  importQuote?: { url: string; quote: unknown }[];
+  lookupQuote?: string[];
+  importAttempt?: string[];
+}) {
+  return {
+    services: {
+      mintService: {
+        addMintByUrl: async (url: string) => {
+          calls.addMintByUrl?.push(url);
+        },
+      },
+      mintOperationService: {
+        getOperationByQuote: async (_url: string, quoteId: string) => {
+          calls.lookupQuote?.push(quoteId);
+          return undefined;
+        },
+        importQuote: async (url: string, quote: unknown) => {
+          calls.importAttempt?.push(String((quote as { quoteId?: string }).quoteId));
+          calls.importQuote?.push({ url, quote });
+        },
+      },
+      paymentRequestService: {},
+    },
+    registerExtension: () => {},
+  };
+}
+
+describe("NPC account sync mapping", () => {
   it("groups quotes by mintUrl, forwards to services, and updates since", async () => {
     const calls = {
       addMintByUrl: [] as string[],
@@ -17,42 +51,24 @@ describe("NPCPlugin sync mapping", () => {
       },
     };
 
-    const plugin = new NPCPlugin(
-      "https://npc.example.com",
-      createMockSigner(),
-      {
-        sinceStore,
-      },
-    );
-
-    const ctx = {
-      services: {
-        mintService: {
-          addMintByUrl: async (url: string) => {
-            calls.addMintByUrl.push(url);
-          },
-        },
-        mintOperationService: {
-          getOperationByQuote: async () => undefined,
-          importQuote: async (url: string, quote: unknown) => {
-            calls.importQuote.push({ url, quote });
-          },
-        },
-        paymentRequestService: {},
-      },
-      registerExtension: () => {},
-    };
-
+    const plugin = new NPCPlugin();
+    const ctx = createContext(calls);
     plugin.onInit(ctx as Parameters<typeof plugin.onInit>[0]);
+    const account = await plugin.addAccount({
+      id: "account-1",
+      signer: createMockSigner(),
+      baseUrl: "https://npc.example.com",
+      sinceStore,
+    });
     plugin.onReady();
 
-    (plugin as unknown as { npcClient: unknown }).npcClient = {
+    const runtime = getAccountRuntime(plugin);
+    (runtime as unknown as { client: unknown }).client = {
       getQuotesSince: async () => makeQuotes(),
     };
 
-    await plugin.sync();
+    await account.sync();
 
-    // Both mints should be added (order may vary due to Promise.all)
     expect(calls.addMintByUrl.sort()).toEqual([
       "https://mint.a",
       "https://mint.b",
@@ -64,18 +80,16 @@ describe("NPCPlugin sync mapping", () => {
     expect(groupA.length).toBe(2);
     expect(groupB.length).toBe(1);
 
-    // Check transformed quote structure
     const firstQuote = groupA[0]?.quote as Record<string, unknown>;
     expect(firstQuote.unit).toBe("sat");
     expect(firstQuote.state).toBe("PAID");
     expect(firstQuote.expiry).toBe(firstQuote.expiresAt);
     expect(firstQuote.quote).toBe(firstQuote.quoteId);
 
-    // Should update to the max paidAt value
     expect(calls.setSince).toEqual([200]);
   });
 
-  it("no-op when no quotes returned", async () => {
+  it("no-ops when no quotes returned", async () => {
     let setCalled = false;
     const sinceStore = {
       get: async () => 123,
@@ -84,34 +98,23 @@ describe("NPCPlugin sync mapping", () => {
       },
     };
 
-    const plugin = new NPCPlugin(
-      "https://npc.example.com",
-      createMockSigner(),
-      {
-        sinceStore,
-      },
-    );
-
-    const ctx = {
-      services: {
-        mintService: { addMintByUrl: async () => {} },
-        mintOperationService: {
-          getOperationByQuote: async () => undefined,
-          importQuote: async () => {},
-        },
-        paymentRequestService: {},
-      },
-      registerExtension: () => {},
-    };
-
+    const plugin = new NPCPlugin();
+    const ctx = createContext({});
     plugin.onInit(ctx as Parameters<typeof plugin.onInit>[0]);
+    const account = await plugin.addAccount({
+      id: "account-1",
+      signer: createMockSigner(),
+      baseUrl: "https://npc.example.com",
+      sinceStore,
+    });
     plugin.onReady();
 
-    (plugin as unknown as { npcClient: unknown }).npcClient = {
+    const runtime = getAccountRuntime(plugin);
+    (runtime as unknown as { client: unknown }).client = {
       getQuotesSince: async () => [],
     };
 
-    await plugin.sync();
+    await account.sync();
 
     expect(setCalled).toBe(false);
   });
@@ -123,46 +126,33 @@ describe("NPCPlugin sync mapping", () => {
       set: async () => {},
     };
 
-    const plugin = new NPCPlugin(
-      "https://npc.example.com",
-      createMockSigner(),
-      {
-        sinceStore,
-        logger: {
-          warn: (data: unknown) => {
-            warnings.push(data);
-          },
-          error: () => {},
-          info: () => {},
-          debug: () => {},
-        },
-      },
-    );
-
     const calls = {
       importQuote: [] as { url: string; quote: unknown }[],
     };
 
-    const ctx = {
-      services: {
-        mintService: { addMintByUrl: async () => {} },
-        mintOperationService: {
-          getOperationByQuote: async () => undefined,
-          importQuote: async (url: string, quote: unknown) => {
-            calls.importQuote.push({ url, quote });
-          },
+    const plugin = new NPCPlugin({
+      logger: {
+        warn: (data: unknown) => {
+          warnings.push(data);
         },
-        paymentRequestService: {},
+        error: () => {},
+        info: () => {},
+        debug: () => {},
       },
-      registerExtension: () => {},
-    };
-
+    });
+    const ctx = createContext(calls);
     plugin.onInit(ctx as Parameters<typeof plugin.onInit>[0]);
+    const account = await plugin.addAccount({
+      id: "account-1",
+      signer: createMockSigner(),
+      baseUrl: "https://npc.example.com",
+      sinceStore,
+    });
     plugin.onReady();
 
-    (plugin as unknown as { npcClient: unknown }).npcClient = {
+    const runtime = getAccountRuntime(plugin);
+    (runtime as unknown as { client: unknown }).client = {
       getQuotesSince: async () => [
-        // Valid quote
         {
           mintUrl: "https://mint.a",
           quoteId: "q1",
@@ -170,19 +160,14 @@ describe("NPCPlugin sync mapping", () => {
           expiresAt: 200,
           amount: 50,
         },
-        // Invalid: missing quoteId
         { mintUrl: "https://mint.a", paidAt: 100 },
-        // Invalid: bad mintUrl
         { mintUrl: "not-a-url", quoteId: "q2", paidAt: 100 },
       ],
     };
 
-    await plugin.sync();
+    await account.sync();
 
-    // Only the valid quote should be processed
     expect(calls.importQuote.length).toBe(1);
-
-    // Should have logged warnings for invalid quotes
     expect(warnings.length).toBe(2);
   });
 
@@ -209,23 +194,18 @@ describe("NPCPlugin sync mapping", () => {
       },
     };
 
-    const plugin = new NPCPlugin(
-      "https://npc.example.com",
-      createMockSigner(),
-      {
-        sinceStore,
-        logger: {
-          warn: (data: unknown) => {
-            warnings.push(String(data));
-          },
-          error: (data: unknown) => {
-            errors.push(String(data));
-          },
-          info: () => {},
-          debug: () => {},
+    const plugin = new NPCPlugin({
+      logger: {
+        warn: (data: unknown) => {
+          warnings.push(String(data));
         },
+        error: (data: unknown) => {
+          errors.push(String(data));
+        },
+        info: () => {},
+        debug: () => {},
       },
-    );
+    });
 
     const ctx = {
       services: {
@@ -259,9 +239,16 @@ describe("NPCPlugin sync mapping", () => {
     };
 
     plugin.onInit(ctx as Parameters<typeof plugin.onInit>[0]);
+    const account = await plugin.addAccount({
+      id: "account-1",
+      signer: createMockSigner(),
+      baseUrl: "https://npc.example.com",
+      sinceStore,
+    });
     plugin.onReady();
 
-    (plugin as unknown as { npcClient: unknown }).npcClient = {
+    const runtime = getAccountRuntime(plugin);
+    (runtime as unknown as { client: unknown }).client = {
       getQuotesSince: async () => [
         {
           mintUrl: "https://mint.a",
@@ -294,7 +281,7 @@ describe("NPCPlugin sync mapping", () => {
       ],
     };
 
-    await plugin.sync();
+    await account.sync();
 
     expect(calls.importQuote.map((entry) => entry.quote.quoteId)).toEqual([
       "q1",
@@ -303,14 +290,19 @@ describe("NPCPlugin sync mapping", () => {
     expect(calls.importAttempt.toSorted()).toEqual(["q1", "q2", "q3"]);
     expect(calls.lookupQuote.toSorted()).toEqual(["q1", "q2", "q3"]);
     expect(calls.setSince).toEqual([110]);
-    expect(warnings.some((message) => message.includes("Sync completed with quote failures"))).toBe(true);
-    expect(errors.some((message) => message.includes("Failed to import quote"))).toBe(true);
+    expect(
+      warnings.some((message) =>
+        message.includes("Sync completed with quote failures"),
+      ),
+    ).toBe(true);
+    expect(errors.some((message) => message.includes("Failed to import quote")))
+      .toBe(true);
 
     calls.lookupQuote = [];
     calls.importAttempt = [];
     calls.importQuote = [];
 
-    await plugin.sync();
+    await account.sync();
 
     expect(calls.lookupQuote.toSorted()).toEqual(["q2", "q3"]);
     expect(calls.importAttempt).toEqual(["q2"]);
@@ -331,14 +323,6 @@ describe("NPCPlugin sync mapping", () => {
       },
     };
 
-    const plugin = new NPCPlugin(
-      "https://npc.example.com",
-      createMockSigner(),
-      {
-        sinceStore,
-      },
-    );
-
     const existingByQuote = new Map<
       string,
       { id: string; state: "init" | "pending" | "executing" | "finalized" | "failed" }
@@ -350,6 +334,7 @@ describe("NPCPlugin sync mapping", () => {
       ["q5", { id: "op-q5", state: "failed" }],
     ]);
 
+    const plugin = new NPCPlugin();
     const ctx = {
       services: {
         mintService: {
@@ -369,9 +354,16 @@ describe("NPCPlugin sync mapping", () => {
     };
 
     plugin.onInit(ctx as Parameters<typeof plugin.onInit>[0]);
+    const account = await plugin.addAccount({
+      id: "account-1",
+      signer: createMockSigner(),
+      baseUrl: "https://npc.example.com",
+      sinceStore,
+    });
     plugin.onReady();
 
-    (plugin as unknown as { npcClient: unknown }).npcClient = {
+    const runtime = getAccountRuntime(plugin);
+    (runtime as unknown as { client: unknown }).client = {
       getQuotesSince: async () => [
         {
           mintUrl: "https://mint.a",
@@ -411,7 +403,7 @@ describe("NPCPlugin sync mapping", () => {
       ],
     };
 
-    await plugin.sync();
+    await account.sync();
 
     expect(calls.importAttempt).toEqual(["q1"]);
     expect(calls.setSince).toEqual([150]);
