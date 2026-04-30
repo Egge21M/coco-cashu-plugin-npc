@@ -109,8 +109,23 @@ export class NPCAccountRuntime {
 
   attachContext(ctx: NPCPluginContext): void {
     this.ctx = ctx;
+  }
+
+  markReady(): void {
+    if (this.isReady) return;
+
     this.isReady = true;
     this.resolveReadyWaiters();
+
+    if (this.isStarted) {
+      if (this.useWebsocket) {
+        this.connectWebSocket();
+      }
+
+      if (this.syncIntervalMs !== undefined) {
+        this.armIntervalTimer();
+      }
+    }
   }
 
   getStatus(): NPCAccountStatus {

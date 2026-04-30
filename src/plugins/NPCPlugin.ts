@@ -119,6 +119,7 @@ export class NPCPlugin implements Plugin<RequiredServices> {
     if (ctx) {
       for (const entry of this.accounts.values()) {
         entry.runtime.attachContext(ctx);
+        entry.runtime.markReady();
       }
     }
 
@@ -160,6 +161,9 @@ export class NPCPlugin implements Plugin<RequiredServices> {
     const ctx = this.ctx;
     if (ctx) {
       runtime.attachContext(ctx);
+      if (this.isReady) {
+        runtime.markReady();
+      }
     }
 
     const now = Date.now();

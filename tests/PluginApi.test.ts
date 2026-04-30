@@ -8,6 +8,7 @@ import {
   createMockServices,
   createMockSigner,
   getAccountRuntime,
+  stubTimeout,
 } from "./helpers";
 
 describe("NPCPluginApi", () => {
@@ -214,5 +215,304 @@ describe("NPCPluginApi", () => {
 
     expect(active.toSorted()).toEqual(["account-1", "account-2"]);
     expect(completed.toSorted()).toEqual(["account-1", "account-2"]);
+  });
+
+  it("syncAll lets one account fail without blocking another account", async () => {
+    const plugin = new NPCPlugin();
+    const { ctx } = createMockContext();
+    plugin.onInit(ctx as unknown as Parameters<typeof plugin.onInit>[0]);
+    await plugin.addAccount({
+      id: "account-1",
+      signer: createMockSigner(),
+      baseUrl: "https://npc.example.com",
+    });
+    await plugin.addAccount({
+      id: "account-2",
+      signer: createMockSigner(),
+      baseUrl: "https://npc.example.com",
+    });
+    plugin.onReady();
+
+    const completed: string[] = [];
+    const runtime1 = getAccountRuntime(plugin, "account-1");
+    const runtime2 = getAccountRuntime(plugin, "account-2");
+
+    (runtime1 as unknown as { client: unknown }).client = {
+      getQuotesSince: async () => {
+        throw new Error("boom");
+      },
+    };
+    (runtime2 as unknown as { client: unknown }).client = {
+      getQuotesSince: async () => {
+        completed.push("account-2");
+        return [];
+      },
+    };
+
+    await plugin.syncAll();
+
+    expect(completed).toEqual(["account-2"]);
+  });
+
+  it("re-adding the same id with the same config returns the same account API", async () => {
+    const plugin = new NPCPlugin();
+    const { ctx } = createMockContext();
+    const signer = createMockSigner();
+    const sinceStore = new MemorySinceStore(0);
+    plugin.onInit(ctx as unknown as Parameters<typeof plugin.onInit>[0]);
+
+    const first = await plugin.addAccount({
+      id: "account-1",
+      signer,
+      baseUrl: "https://npc.example.com",
+      sinceStore,
+      syncIntervalMs: 1000,
+      useWebsocket: true,
+      autoStart: false,
+    });
+    const second = await plugin.addAccount({
+      id: "account-1",
+      signer,
+      baseUrl: "https://npc.example.com",
+      sinceStore,
+      syncIntervalMs: 1000,
+      useWebsocket: true,
+      autoStart: false,
+    });
+
+    expect(second).toBe(first);
+  });
+
+  it("idempotent re-add does not restart timers", async () => {
+    const plugin = new NPCPlugin();
+    const { ctx } = createMockContext();
+    const signer = createMockSigner();
+    const sinceStore = new MemorySinceStore(0);
+    plugin.onInit(ctx as unknown as Parameters<typeof plugin.onInit>[0]);
+    await plugin.addAccount({
+      id: "account-1",
+      signer,
+      baseUrl: "https://npc.example.com",
+      sinceStore,
+      syncIntervalMs: 1000,
+    });
+
+    const t = stubTimeout();
+    try {
+      plugin.onReady();
+      expect(t.timeouts.length).toBe(1);
+
+      await plugin.addAccount({
+        id: "account-1",
+        signer,
+        baseUrl: "https://npc.example.com",
+        sinceStore,
+        syncIntervalMs: 1000,
+      });
+
+      expect(t.timeouts.length).toBe(1);
+    } finally {
+      t.restore();
+    }
+  });
+
+  it("idempotent re-add does not recreate factory since stores", async () => {
+    let factoryCalls = 0;
+    const signer = createMockSigner();
+    const plugin = new NPCPlugin({
+      defaultBaseUrl: "https://npc.example.com",
+      sinceStoreFactory: () => {
+        factoryCalls += 1;
+        return new MemorySinceStore(0);
+      },
+    });
+    const { ctx } = createMockContext();
+    plugin.onInit(ctx as unknown as Parameters<typeof plugin.onInit>[0]);
+
+    await plugin.addAccount({ id: "account-1", signer });
+    await plugin.addAccount({ id: "account-1", signer });
+
+    expect(factoryCalls).toBe(1);
+  });
+
+  it("throws when the same id is re-added with conflicting config", async () => {
+    const plugin = new NPCPlugin();
+    const { ctx } = createMockContext();
+    plugin.onInit(ctx as unknown as Parameters<typeof plugin.onInit>[0]);
+    const signer = createMockSigner();
+
+    await plugin.addAccount({
+      id: "account-1",
+      signer,
+      baseUrl: "https://npc.example.com",
+    });
+
+    await expect(
+      plugin.addAccount({
+        id: "account-1",
+        signer: createMockSigner(),
+        baseUrl: "https://npc.example.com",
+      }),
+    ).rejects.toThrow("already exists with different configuration");
+    await expect(
+      plugin.addAccount({
+        id: "account-1",
+        signer,
+        baseUrl: "https://other.example.com",
+      }),
+    ).rejects.toThrow("already exists with different configuration");
+    await expect(
+      plugin.addAccount({
+        id: "account-1",
+        signer,
+        baseUrl: "https://npc.example.com",
+        autoStart: false,
+      }),
+    ).rejects.toThrow("already exists with different configuration");
+  });
+
+  it("uses explicit sinceStore for one account", async () => {
+    const sinceStore = new MemorySinceStore(42);
+    const plugin = new NPCPlugin();
+    const { ctx } = createMockContext();
+    plugin.onInit(ctx as unknown as Parameters<typeof plugin.onInit>[0]);
+
+    await plugin.addAccount({
+      id: "account-1",
+      signer: createMockSigner(),
+      baseUrl: "https://npc.example.com",
+      sinceStore,
+    });
+
+    expect(getAccountRuntime(plugin).sinceStore).toBe(sinceStore);
+  });
+
+  it("sinceStoreFactory receives account id and base URL", async () => {
+    const calls: Array<{ id: string; baseUrl: string }> = [];
+    const plugin = new NPCPlugin({
+      sinceStoreFactory: (id, baseUrl) => {
+        calls.push({ id, baseUrl });
+        return new MemorySinceStore(0);
+      },
+    });
+    const { ctx } = createMockContext();
+    plugin.onInit(ctx as unknown as Parameters<typeof plugin.onInit>[0]);
+
+    await plugin.addAccount({
+      id: "account-1",
+      signer: createMockSigner(),
+      baseUrl: "https://npc.example.com",
+    });
+
+    expect(calls).toEqual([
+      {
+        id: "account-1",
+        baseUrl: "https://npc.example.com",
+      },
+    ]);
+  });
+
+  it("two accounts do not share fallback stores", async () => {
+    const plugin = new NPCPlugin();
+    const { ctx } = createMockContext();
+    plugin.onInit(ctx as unknown as Parameters<typeof plugin.onInit>[0]);
+
+    await plugin.addAccount({
+      id: "account-1",
+      signer: createMockSigner(),
+      baseUrl: "https://npc.example.com",
+    });
+    await plugin.addAccount({
+      id: "account-2",
+      signer: createMockSigner(),
+      baseUrl: "https://npc.example.com",
+    });
+
+    const store1 = getAccountRuntime(plugin, "account-1").sinceStore;
+    const store2 = getAccountRuntime(plugin, "account-2").sinceStore;
+
+    expect(store1).not.toBe(store2);
+  });
+
+  it("persists account metadata on add and remove", async () => {
+    const records: unknown[] = [];
+    const removed: string[] = [];
+    const plugin = new NPCPlugin({
+      accountStore: {
+        list: async () => [],
+        upsert: async (record) => {
+          records.push(record);
+        },
+        remove: async (accountId) => {
+          removed.push(accountId);
+        },
+      },
+    });
+    const { ctx } = createMockContext();
+    plugin.onInit(ctx as unknown as Parameters<typeof plugin.onInit>[0]);
+
+    await plugin.addAccount({
+      id: "account-1",
+      signer: createMockSigner(),
+      baseUrl: "https://npc.example.com",
+      syncIntervalMs: 1000,
+      useWebsocket: true,
+      autoStart: false,
+    });
+    await plugin.removeAccount("account-1");
+
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      id: "account-1",
+      baseUrl: "https://npc.example.com",
+      syncIntervalMs: 1000,
+      useWebsocket: true,
+      autoStart: false,
+    });
+    expect(removed).toEqual(["account-1"]);
+  });
+
+  it("store failures fail add and remove clearly", async () => {
+    const plugin = new NPCPlugin({
+      accountStore: {
+        list: async () => [],
+        upsert: async () => {
+          throw new Error("upsert failed");
+        },
+        remove: async () => {},
+      },
+    });
+    const { ctx } = createMockContext();
+    plugin.onInit(ctx as unknown as Parameters<typeof plugin.onInit>[0]);
+
+    await expect(
+      plugin.addAccount({
+        id: "account-1",
+        signer: createMockSigner(),
+        baseUrl: "https://npc.example.com",
+      }),
+    ).rejects.toThrow("upsert failed");
+    expect(plugin.getAccount("account-1")).toBeUndefined();
+
+    const removePlugin = new NPCPlugin({
+      accountStore: {
+        list: async () => [],
+        upsert: async () => {},
+        remove: async () => {
+          throw new Error("remove failed");
+        },
+      },
+    });
+    removePlugin.onInit(ctx as unknown as Parameters<typeof plugin.onInit>[0]);
+    await removePlugin.addAccount({
+      id: "account-1",
+      signer: createMockSigner(),
+      baseUrl: "https://npc.example.com",
+    });
+
+    await expect(removePlugin.removeAccount("account-1")).rejects.toThrow(
+      "remove failed",
+    );
+    expect(removePlugin.getAccount("account-1")).toBeDefined();
   });
 });
