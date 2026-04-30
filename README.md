@@ -24,6 +24,8 @@ bun add coco-cashu-core typescript
 
 This package uses `npubcash-sdk` internally for NPC API access and JWT auth.
 
+Upgrading from v2? See [Migrating To v3](docs/migrating-to-v3.md).
+
 ## Quick Start
 
 ```ts
