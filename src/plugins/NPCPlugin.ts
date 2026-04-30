@@ -23,6 +23,7 @@ import {
 export type { NPCPluginOptions, NPCPluginStatus } from "../types";
 
 type RequiredServices = typeof npcRequiredServices;
+type Unsubscribe = () => void;
 
 interface NormalizedAccountConfig {
   id: string;
@@ -63,6 +64,7 @@ export class NPCPlugin implements Plugin<RequiredServices> {
   private isReady = false;
   private isShuttingDown = false;
   private rootApi?: NPCPluginApi;
+  private lifecycleUnsubscribers: Unsubscribe[] = [];
 
   constructor(options?: NPCPluginOptions) {
     if (options?.defaultBaseUrl && !isValidUrl(options.defaultBaseUrl)) {
@@ -102,12 +104,14 @@ export class NPCPlugin implements Plugin<RequiredServices> {
     this.ctx = ctx;
     this.rootApi = new NPCPluginApi(this);
     ctx.registerExtension("npc", this.rootApi);
+    this.subscribeToLifecycleEvents(ctx);
 
     for (const entry of this.accounts.values()) {
       entry.runtime.attachContext(ctx);
     }
 
     return async () => {
+      this.unsubscribeFromLifecycleEvents();
       await this.shutdown();
     };
   }
@@ -216,6 +220,7 @@ export class NPCPlugin implements Plugin<RequiredServices> {
   }
 
   async shutdown(): Promise<void> {
+    this.unsubscribeFromLifecycleEvents();
     this.isShuttingDown = true;
     await Promise.all(
       Array.from(this.accounts.values()).map((entry) =>
@@ -279,6 +284,45 @@ export class NPCPlugin implements Plugin<RequiredServices> {
       return this.sinceStoreFactory(config.id, config.baseUrl);
     }
     return new MemorySinceStore(0);
+  }
+
+  private subscribeToLifecycleEvents(ctx: NPCPluginContext): void {
+    this.unsubscribeFromLifecycleEvents();
+
+    const eventBus = ctx.services.eventBus;
+    if (!eventBus) return;
+
+    this.lifecycleUnsubscribers = [
+      eventBus.on("subscriptions:paused", () => {
+        this.pauseSubscriptions();
+      }),
+      eventBus.on("subscriptions:resumed", () => {
+        this.resumeSubscriptions();
+      }),
+    ];
+  }
+
+  private unsubscribeFromLifecycleEvents(): void {
+    const unsubscribers = this.lifecycleUnsubscribers;
+    this.lifecycleUnsubscribers = [];
+
+    for (const unsubscribe of unsubscribers) {
+      unsubscribe();
+    }
+  }
+
+  private pauseSubscriptions(): void {
+    for (const entry of this.accounts.values()) {
+      entry.runtime.pauseSubscriptions();
+    }
+  }
+
+  private resumeSubscriptions(): void {
+    if (this.isShuttingDown) return;
+
+    for (const entry of this.accounts.values()) {
+      entry.runtime.resumeSubscriptions();
+    }
   }
 
   private getPaymentRequestService(): NPCPluginContext["services"]["paymentRequestService"] {

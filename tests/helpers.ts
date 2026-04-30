@@ -20,6 +20,30 @@ export function createMockServices() {
     addMintByUrl: [] as string[],
     importQuote: [] as { url: string; quote: unknown }[],
   };
+  const eventHandlers = new Map<string, Set<(payload?: unknown) => void>>();
+  const eventBus = {
+    on: (event: string, handler: (payload?: unknown) => void) => {
+      let handlers = eventHandlers.get(event);
+      if (!handlers) {
+        handlers = new Set();
+        eventHandlers.set(event, handlers);
+      }
+      handlers.add(handler);
+
+      return () => {
+        handlers.delete(handler);
+        if (handlers.size === 0) {
+          eventHandlers.delete(event);
+        }
+      };
+    },
+    emit: async (event: string, payload?: unknown) => {
+      for (const handler of eventHandlers.get(event) ?? []) {
+        await handler(payload);
+      }
+    },
+    listenerCount: (event: string) => eventHandlers.get(event)?.size ?? 0,
+  };
 
   const services = {
     mintService: {
@@ -34,6 +58,7 @@ export function createMockServices() {
       },
     },
     paymentRequestService: {},
+    eventBus,
   };
 
   return { calls, services };

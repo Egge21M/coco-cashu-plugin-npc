@@ -235,6 +235,102 @@ describe("NPCPlugin (websocket)", () => {
       t.restore();
     }
   });
+
+  it("pauses and resumes websocket subscriptions from manager lifecycle events", async () => {
+    const { account, ctx, plugin, runtime } = await createReadyAccount({
+      autoStart: false,
+      useWebsocket: true,
+    });
+
+    const unsubscribeCalls: number[] = [];
+
+    (runtime as unknown as { client: unknown }).client = {
+      subscribe: () => {
+        const index = unsubscribeCalls.length;
+        unsubscribeCalls[index] = 0;
+
+        return () => {
+          unsubscribeCalls[index] += 1;
+        };
+      },
+    };
+
+    const eventBus = ctx.services.eventBus as {
+      emit(event: string, payload?: unknown): Promise<void>;
+    };
+
+    account.start();
+    expect(unsubscribeCalls).toEqual([0]);
+    expect(account.getStatus()).toMatchObject({
+      isRunning: true,
+      isWebSocketConnected: true,
+    });
+
+    await eventBus.emit("subscriptions:paused");
+
+    expect(unsubscribeCalls).toEqual([1]);
+    expect(account.getStatus()).toMatchObject({
+      isRunning: true,
+      isWebSocketConnected: false,
+    });
+
+    await eventBus.emit("subscriptions:resumed");
+
+    expect(unsubscribeCalls).toEqual([1, 0]);
+    expect(account.getStatus()).toMatchObject({
+      isRunning: true,
+      isWebSocketConnected: true,
+    });
+
+    await plugin.shutdown();
+    expect(unsubscribeCalls).toEqual([1, 1]);
+  });
+
+  it("does not reconnect websocket subscriptions while manager subscriptions are paused", async () => {
+    const { account, ctx, runtime } = await createReadyAccount({
+      autoStart: false,
+      useWebsocket: true,
+    });
+
+    const unsubscribeCalls: number[] = [];
+    const subscriptions: Array<{ onError?: (error: unknown) => void }> = [];
+
+    (runtime as unknown as { client: unknown }).client = {
+      subscribe: (
+        _onUpdate: (quoteId: string) => void,
+        onError?: (error: unknown) => void,
+      ) => {
+        const index = subscriptions.length;
+        subscriptions.push({ onError });
+        unsubscribeCalls[index] = 0;
+
+        return () => {
+          unsubscribeCalls[index] += 1;
+        };
+      },
+    };
+
+    const eventBus = ctx.services.eventBus as {
+      emit(event: string, payload?: unknown): Promise<void>;
+    };
+    const t = stubTimeout();
+
+    try {
+      account.start();
+      expect(subscriptions.length).toBe(1);
+
+      await eventBus.emit("subscriptions:paused");
+      subscriptions[0]?.onError?.("boom");
+
+      expect(unsubscribeCalls).toEqual([1]);
+      expect(t.timeouts.length).toBe(0);
+
+      await eventBus.emit("subscriptions:resumed");
+      expect(subscriptions.length).toBe(2);
+    } finally {
+      t.restore();
+    }
+  });
 });
 
 describe("NPCPlugin (constructor validation)", () => {

@@ -187,6 +187,8 @@ Important behaviors:
 - `syncAll()` runs accounts concurrently
 - interval polling rearms after the current account sync finishes
 - websocket failures are cleaned up before reconnect attempts are scheduled
+- manager `pauseSubscriptions()` / `resumeSubscriptions()` lifecycle events pause
+  and resume NPC websocket subscriptions for running accounts
 - already-tracked quotes are skipped safely on retry
 - `since` only advances to a safe watermark before the first unresolved failure
 

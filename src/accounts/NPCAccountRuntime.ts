@@ -19,6 +19,7 @@ export const npcRequiredServices = [
   "mintOperationService",
   "mintService",
   "paymentRequestService",
+  "eventBus",
 ] as const;
 
 export type NPCPluginContext = PluginContext<typeof npcRequiredServices>;
@@ -78,6 +79,7 @@ export class NPCAccountRuntime {
   private wsReconnectTimer?: ReturnType<typeof setTimeout>;
   private ctx?: NPCPluginContext;
   private isShuttingDown = false;
+  private areSubscriptionsPaused = false;
   private readyWaiters: Array<() => void> = [];
 
   constructor(options: NPCAccountRuntimeOptions) {
@@ -196,6 +198,27 @@ export class NPCAccountRuntime {
     await this.requestSync(trigger);
   }
 
+  pauseSubscriptions(): void {
+    this.areSubscriptionsPaused = true;
+
+    if (this.wsReconnectTimer) {
+      clearTimeout(this.wsReconnectTimer);
+      this.wsReconnectTimer = undefined;
+    }
+
+    this.disposeWebSocketSubscription();
+  }
+
+  resumeSubscriptions(): void {
+    if (!this.areSubscriptionsPaused) return;
+
+    this.areSubscriptionsPaused = false;
+
+    if (this.useWebsocket) {
+      this.connectWebSocket();
+    }
+  }
+
   private teardown(): void {
     if (this.intervalTimer) {
       clearTimeout(this.intervalTimer);
@@ -250,7 +273,15 @@ export class NPCAccountRuntime {
   }
 
   private connectWebSocket(): void {
-    if (this.isShuttingDown || !this.isStarted || this.unsubscribe) return;
+    if (
+      this.isShuttingDown ||
+      this.areSubscriptionsPaused ||
+      !this.isReady ||
+      !this.isStarted ||
+      this.unsubscribe
+    ) {
+      return;
+    }
 
     try {
       this.unsubscribe = this.client.subscribe(
@@ -284,7 +315,14 @@ export class NPCAccountRuntime {
   }
 
   private scheduleWebSocketReconnect(): void {
-    if (this.isShuttingDown || !this.isStarted || this.wsReconnectTimer) return;
+    if (
+      this.isShuttingDown ||
+      this.areSubscriptionsPaused ||
+      !this.isStarted ||
+      this.wsReconnectTimer
+    ) {
+      return;
+    }
 
     this.disposeWebSocketSubscription();
 
