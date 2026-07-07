@@ -31,6 +31,8 @@ describe("NPCPlugin sync mapping", () => {
           addMintByUrl: async (url: string) => {
             calls.addMintByUrl.push(url);
           },
+          isTrustedMint: async (url: string) =>
+            url === "https://mint.a" || url === "https://mint.b",
         },
         mintOperationService: {
           getOperationByQuote: async () => undefined,
@@ -52,11 +54,7 @@ describe("NPCPlugin sync mapping", () => {
 
     await plugin.sync();
 
-    // Both mints should be added (order may vary due to Promise.all)
-    expect(calls.addMintByUrl.sort()).toEqual([
-      "https://mint.a",
-      "https://mint.b",
-    ]);
+    expect(calls.addMintByUrl).toEqual([]);
 
     const groupA = calls.importQuote.filter((g) => g.url === "https://mint.a");
     const groupB = calls.importQuote.filter((g) => g.url === "https://mint.b");
@@ -116,6 +114,209 @@ describe("NPCPlugin sync mapping", () => {
     expect(setCalled).toBe(false);
   });
 
+  it("blocks unknown quote mints by default and preserves the watermark", async () => {
+    const calls = {
+      addMintByUrl: [] as string[],
+      importQuote: [] as { url: string; quote: unknown }[],
+      setSince: [] as number[],
+    };
+    const sinceStore = {
+      get: async () => 0,
+      set: async (since: number) => {
+        calls.setSince.push(since);
+      },
+    };
+
+    const plugin = new NPCPlugin(
+      "https://npc.example.com",
+      createMockSigner(),
+      {
+        sinceStore,
+      },
+    );
+
+    const ctx = {
+      services: {
+        mintService: {
+          addMintByUrl: async (url: string) => {
+            calls.addMintByUrl.push(url);
+          },
+          isTrustedMint: async () => false,
+        },
+        mintOperationService: {
+          getOperationByQuote: async () => undefined,
+          importQuote: async (url: string, quote: unknown) => {
+            calls.importQuote.push({ url, quote });
+          },
+        },
+        paymentRequestService: {},
+      },
+      registerExtension: () => {},
+    };
+
+    plugin.onInit(ctx as Parameters<typeof plugin.onInit>[0]);
+    plugin.onReady();
+
+    (plugin as unknown as { npcClient: unknown }).npcClient = {
+      getQuotesSince: async () => [
+        {
+          mintUrl: "https://mint.unknown",
+          quoteId: "blocked",
+          paidAt: 100,
+          expiresAt: 200,
+          amount: 50,
+        },
+      ],
+    };
+
+    const report = await plugin.sync();
+
+    expect(calls.addMintByUrl).toEqual([]);
+    expect(calls.importQuote).toEqual([]);
+    expect(calls.setSince).toEqual([]);
+    expect(report.blockedQuotes).toEqual([
+      {
+        mintUrl: "https://mint.unknown",
+        quoteId: "blocked",
+        paidAt: 100,
+      },
+    ]);
+    expect(plugin.getStatus().blockedQuotes).toEqual(report.blockedQuotes);
+  });
+
+  it("imports allow-listed quote mints without trusting them", async () => {
+    const calls = {
+      addMintByUrl: [] as { url: string; trusted?: boolean }[],
+      importQuote: [] as { url: string; quote: unknown }[],
+      setSince: [] as number[],
+    };
+    const sinceStore = {
+      get: async () => 0,
+      set: async (since: number) => {
+        calls.setSince.push(since);
+      },
+    };
+
+    const plugin = new NPCPlugin(
+      "https://npc.example.com",
+      createMockSigner(),
+      {
+        sinceStore,
+        quoteMintPolicy: {
+          mode: "allow-list",
+          mintUrls: ["https://mint.allowed"],
+        },
+      },
+    );
+
+    const ctx = {
+      services: {
+        mintService: {
+          addMintByUrl: async (url: string, options?: { trusted?: boolean }) => {
+            calls.addMintByUrl.push({ url, trusted: options?.trusted });
+          },
+          isTrustedMint: async () => false,
+        },
+        mintOperationService: {
+          getOperationByQuote: async () => undefined,
+          importQuote: async (url: string, quote: unknown) => {
+            calls.importQuote.push({ url, quote });
+          },
+        },
+        paymentRequestService: {},
+      },
+      registerExtension: () => {},
+    };
+
+    plugin.onInit(ctx as Parameters<typeof plugin.onInit>[0]);
+    plugin.onReady();
+
+    (plugin as unknown as { npcClient: unknown }).npcClient = {
+      getQuotesSince: async () => [
+        {
+          mintUrl: "https://mint.allowed",
+          quoteId: "allowed",
+          paidAt: 100,
+          expiresAt: 200,
+          amount: 50,
+        },
+      ],
+    };
+
+    const report = await plugin.sync();
+
+    expect(calls.addMintByUrl).toEqual([
+      { url: "https://mint.allowed", trusted: undefined },
+    ]);
+    expect(calls.importQuote.length).toBe(1);
+    expect(calls.setSince).toEqual([100]);
+    expect(report.blockedQuotes).toEqual([]);
+  });
+
+  it("preserves legacy auto-trust behavior when explicitly configured", async () => {
+    const calls = {
+      addMintByUrl: [] as { url: string; trusted?: boolean }[],
+      importQuote: [] as { url: string; quote: unknown }[],
+      setSince: [] as number[],
+    };
+    const sinceStore = {
+      get: async () => 0,
+      set: async (since: number) => {
+        calls.setSince.push(since);
+      },
+    };
+
+    const plugin = new NPCPlugin(
+      "https://npc.example.com",
+      createMockSigner(),
+      {
+        sinceStore,
+        quoteMintPolicy: { mode: "auto-trust" },
+      },
+    );
+
+    const ctx = {
+      services: {
+        mintService: {
+          addMintByUrl: async (url: string, options?: { trusted?: boolean }) => {
+            calls.addMintByUrl.push({ url, trusted: options?.trusted });
+          },
+        },
+        mintOperationService: {
+          getOperationByQuote: async () => undefined,
+          importQuote: async (url: string, quote: unknown) => {
+            calls.importQuote.push({ url, quote });
+          },
+        },
+        paymentRequestService: {},
+      },
+      registerExtension: () => {},
+    };
+
+    plugin.onInit(ctx as Parameters<typeof plugin.onInit>[0]);
+    plugin.onReady();
+
+    (plugin as unknown as { npcClient: unknown }).npcClient = {
+      getQuotesSince: async () => [
+        {
+          mintUrl: "https://mint.legacy",
+          quoteId: "legacy",
+          paidAt: 100,
+          expiresAt: 200,
+          amount: 50,
+        },
+      ],
+    };
+
+    await plugin.sync();
+
+    expect(calls.addMintByUrl).toEqual([
+      { url: "https://mint.legacy", trusted: true },
+    ]);
+    expect(calls.importQuote.length).toBe(1);
+    expect(calls.setSince).toEqual([100]);
+  });
+
   it("skips invalid quotes and logs warning", async () => {
     const warnings: unknown[] = [];
     const sinceStore = {
@@ -145,7 +346,10 @@ describe("NPCPlugin sync mapping", () => {
 
     const ctx = {
       services: {
-        mintService: { addMintByUrl: async () => {} },
+        mintService: {
+          addMintByUrl: async () => {},
+          isTrustedMint: async (url: string) => url === "https://mint.a",
+        },
         mintOperationService: {
           getOperationByQuote: async () => undefined,
           importQuote: async (url: string, quote: unknown) => {
@@ -231,6 +435,8 @@ describe("NPCPlugin sync mapping", () => {
       services: {
         mintService: {
           addMintByUrl: async () => {},
+          isTrustedMint: async (url: string) =>
+            url === "https://mint.a" || url === "https://mint.b",
         },
         mintOperationService: {
           getOperationByQuote: async (_url: string, quoteId: string) => {
@@ -303,7 +509,7 @@ describe("NPCPlugin sync mapping", () => {
     expect(calls.importAttempt.toSorted()).toEqual(["q1", "q2", "q3"]);
     expect(calls.lookupQuote.toSorted()).toEqual(["q1", "q2", "q3"]);
     expect(calls.setSince).toEqual([110]);
-    expect(warnings.some((message) => message.includes("Sync completed with quote failures"))).toBe(true);
+    expect(warnings.some((message) => message.includes("Sync completed with unresolved quotes"))).toBe(true);
     expect(errors.some((message) => message.includes("Failed to import quote"))).toBe(true);
 
     calls.lookupQuote = [];
@@ -354,6 +560,7 @@ describe("NPCPlugin sync mapping", () => {
       services: {
         mintService: {
           addMintByUrl: async () => {},
+          isTrustedMint: async (url: string) => url === "https://mint.a",
         },
         mintOperationService: {
           getOperationByQuote: async (_url: string, quoteId: string) =>

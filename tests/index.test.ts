@@ -69,6 +69,7 @@ describe("type exports (compile-time check)", () => {
       isReady: true,
       isSyncing: false,
       isWebSocketConnected: false,
+      blockedQuotes: [],
     };
     expect(status.isReady).toBe(true);
   });

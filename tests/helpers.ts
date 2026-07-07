@@ -12,16 +12,33 @@ export function createMockSigner(): Signer {
 /**
  * Creates mock services for testing
  */
-export function createMockServices() {
+export function createMockServices(options?: {
+  trustedMintUrls?: readonly string[];
+}) {
+  const trustedMintUrls = new Set(options?.trustedMintUrls ?? []);
   const calls = {
     addMintByUrl: [] as string[],
+    addMintByUrlOptions: [] as { url: string; trusted?: boolean }[],
+    ensureUpdatedMint: [] as string[],
+    isTrustedMint: [] as string[],
     importQuote: [] as { url: string; quote: unknown }[],
   };
 
   const services = {
     mintService: {
-      addMintByUrl: async (url: string) => {
+      addMintByUrl: async (url: string, addOptions?: { trusted?: boolean }) => {
         calls.addMintByUrl.push(url);
+        calls.addMintByUrlOptions.push({ url, trusted: addOptions?.trusted });
+        if (addOptions?.trusted) {
+          trustedMintUrls.add(url);
+        }
+      },
+      ensureUpdatedMint: async (url: string) => {
+        calls.ensureUpdatedMint.push(url);
+      },
+      isTrustedMint: async (url: string) => {
+        calls.isTrustedMint.push(url);
+        return trustedMintUrls.has(url);
       },
     },
     mintOperationService: {
@@ -39,8 +56,10 @@ export function createMockServices() {
 /**
  * Creates a mock plugin context
  */
-export function createMockContext() {
-  const { calls, services } = createMockServices();
+export function createMockContext(options?: {
+  trustedMintUrls?: readonly string[];
+}) {
+  const { calls, services } = createMockServices(options);
   return {
     calls,
     ctx: {

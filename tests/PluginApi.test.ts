@@ -12,7 +12,32 @@ describe("PluginApi", () => {
       {} as never,
       async () => {
         synced = true;
+        return {
+          since: 0,
+          newSince: 0,
+          importedCount: 0,
+          skippedCount: 0,
+          failedCount: 0,
+          blockedQuotes: [],
+          failedQuotes: [],
+        };
       },
+      () => ({
+        isInitialized: true,
+        isReady: true,
+        isSyncing: false,
+        isWebSocketConnected: false,
+        blockedQuotes: [],
+      }),
+      () => ({
+        since: 0,
+        newSince: 0,
+        importedCount: 0,
+        skippedCount: 0,
+        failedCount: 0,
+        blockedQuotes: [],
+        failedQuotes: [],
+      }),
     );
 
     await api.sync();
@@ -26,7 +51,9 @@ describe("PluginApi", () => {
       sinceStore,
     });
 
-    const { calls, services } = createMockServices();
+    const { calls, services } = createMockServices({
+      trustedMintUrls: ["https://mint.a"],
+    });
     let extension: PluginApi | undefined;
     const ctx = {
       services,
@@ -55,7 +82,7 @@ describe("PluginApi", () => {
 
     await extension?.sync();
 
-    expect(calls.addMintByUrl).toEqual(["https://mint.a"]);
+    expect(calls.addMintByUrl).toEqual([]);
     expect(calls.importQuote.length).toBe(1);
     expect(await sinceStore.get()).toBe(10);
   });
@@ -98,5 +125,60 @@ describe("PluginApi", () => {
 
     expect(called).toBe(true);
     expect(settled).toBe(true);
+  });
+
+  it("delegates NPC account settings updates to the SDK client", async () => {
+    const calls = {
+      setMintUrl: [] as string[],
+      setLock: [] as boolean[],
+    };
+    const api = new PluginApi(
+      {} as never,
+      {
+        settings: {
+          setMintUrl: async (mintUrl: string) => {
+            calls.setMintUrl.push(mintUrl);
+            return { user: { mintUrl } };
+          },
+          setLock: async (lock: boolean) => {
+            calls.setLock.push(lock);
+            return { user: { lock } };
+          },
+        },
+      } as never,
+      async () => ({
+        since: 0,
+        newSince: 0,
+        importedCount: 0,
+        skippedCount: 0,
+        failedCount: 0,
+        blockedQuotes: [],
+        failedQuotes: [],
+      }),
+      () => ({
+        isInitialized: true,
+        isReady: true,
+        isSyncing: false,
+        isWebSocketConnected: false,
+        blockedQuotes: [],
+      }),
+      () => ({
+        since: 0,
+        newSince: 0,
+        importedCount: 0,
+        skippedCount: 0,
+        failedCount: 0,
+        blockedQuotes: [],
+        failedQuotes: [],
+      }),
+    );
+
+    const mintResult = await api.setMintUrl("https://mint.example.com");
+    const lockResult = await api.setLockQuotes(true);
+
+    expect(calls.setMintUrl).toEqual(["https://mint.example.com"]);
+    expect(calls.setLock).toEqual([true]);
+    expect(mintResult).toEqual({ user: { mintUrl: "https://mint.example.com" } });
+    expect(lockResult).toEqual({ user: { lock: true } });
   });
 });

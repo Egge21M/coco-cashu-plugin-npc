@@ -23,13 +23,54 @@ const requiredServices = [
 /** Trigger types for sync operations */
 type SyncTrigger = "manual" | "websocket" | "interval";
 
-type QuoteSyncStatus = "imported" | "skipped" | "failed";
+type QuoteSyncStatus = "imported" | "skipped" | "failed" | "blocked";
+
+/**
+ * Policy controlling which quote mints the plugin may import into coco.
+ */
+export type NPCQuoteMintPolicy =
+  | { mode: "trusted-only" }
+  | { mode: "allow-list"; mintUrls: readonly string[] }
+  | { mode: "auto-trust" };
+
+/**
+ * A paid NPC quote that was not imported because host mint policy blocked it.
+ */
+export interface NPCBlockedQuote {
+  mintUrl: string;
+  quoteId: string;
+  paidAt: number;
+}
+
+/**
+ * A paid NPC quote that failed during import.
+ */
+export interface NPCFailedQuote {
+  mintUrl: string;
+  quoteId: string;
+  paidAt: number;
+  error: string;
+}
+
+/**
+ * Report from the most recent sync cycle.
+ */
+export interface NPCSyncReport {
+  since: number;
+  newSince: number;
+  importedCount: number;
+  skippedCount: number;
+  failedCount: number;
+  blockedQuotes: NPCBlockedQuote[];
+  failedQuotes: NPCFailedQuote[];
+}
 
 interface QuoteSyncResult {
   mintUrl: string;
   quoteId: string;
   paidAt: number;
   status: QuoteSyncStatus;
+  error?: string;
 }
 
 /** Default WebSocket reconnection settings */
@@ -71,6 +112,12 @@ export interface NPCPluginOptions {
    * a child logger with module context.
    */
   logger?: Logger;
+
+  /**
+   * Policy controlling which quote mints the plugin may import.
+   * Defaults to requiring a mint that the host wallet already trusts.
+   */
+  quoteMintPolicy?: NPCQuoteMintPolicy;
 }
 
 /**
@@ -85,6 +132,8 @@ export interface NPCPluginStatus {
   isSyncing: boolean;
   /** Whether WebSocket is connected */
   isWebSocketConnected: boolean;
+  /** Paid quotes currently blocked by quote mint policy */
+  blockedQuotes: NPCBlockedQuote[];
 }
 
 /**
@@ -102,10 +151,11 @@ export class NPCPlugin implements Plugin<typeof requiredServices> {
   private readonly logger?: StructuredLogger;
   private readonly intervalMs?: number;
   private readonly useWebsocket: boolean;
+  private readonly quoteMintPolicy: NPCQuoteMintPolicy;
 
   private isRunning = false;
   private hasPendingUpdate = false;
-  private runPromise?: Promise<void>;
+  private runPromise?: Promise<NPCSyncReport>;
   private unsubscribe?: () => void;
   private intervalTimer?: ReturnType<typeof setTimeout>;
   private isReady = false;
@@ -115,6 +165,15 @@ export class NPCPlugin implements Plugin<typeof requiredServices> {
   private ctx?: PluginContext<typeof requiredServices>;
   private isShuttingDown = false;
   private readyWaiters: Array<() => void> = [];
+  private lastSyncReport: NPCSyncReport = {
+    since: 0,
+    newSince: 0,
+    importedCount: 0,
+    skippedCount: 0,
+    failedCount: 0,
+    blockedQuotes: [],
+    failedQuotes: [],
+  };
 
   /**
    * Creates a new NPCPlugin instance.
@@ -129,7 +188,8 @@ export class NPCPlugin implements Plugin<typeof requiredServices> {
       throw new Error(`Invalid baseUrl: ${baseUrl}`);
     }
 
-    const { syncIntervalMs, useWebsocket, sinceStore, logger } = options ?? {};
+    const { syncIntervalMs, useWebsocket, sinceStore, logger, quoteMintPolicy } =
+      options ?? {};
 
     this.sinceStore = sinceStore ?? new MemorySinceStore(0);
     this.logger = createChildLogger(logger as StructuredLogger, {
@@ -137,6 +197,7 @@ export class NPCPlugin implements Plugin<typeof requiredServices> {
     });
     this.intervalMs = syncIntervalMs;
     this.useWebsocket = !!useWebsocket;
+    this.quoteMintPolicy = quoteMintPolicy ?? { mode: "trusted-only" };
 
     const npcLogger = createChildLogger(logger as StructuredLogger, {
       module: "npc-client",
@@ -157,6 +218,18 @@ export class NPCPlugin implements Plugin<typeof requiredServices> {
       isReady: this.isReady,
       isSyncing: this.isRunning,
       isWebSocketConnected: this.isWebSocketConnected,
+      blockedQuotes: [...this.lastSyncReport.blockedQuotes],
+    };
+  }
+
+  /**
+   * Returns the report from the most recent sync cycle.
+   */
+  getLastSyncReport(): NPCSyncReport {
+    return {
+      ...this.lastSyncReport,
+      blockedQuotes: [...this.lastSyncReport.blockedQuotes],
+      failedQuotes: [...this.lastSyncReport.failedQuotes],
     };
   }
 
@@ -172,6 +245,8 @@ export class NPCPlugin implements Plugin<typeof requiredServices> {
         ctx.services.paymentRequestService,
         this.npcClient,
         this.sync.bind(this),
+        this.getStatus.bind(this),
+        this.getLastSyncReport.bind(this),
       ),
     );
     return async () => {
@@ -205,11 +280,11 @@ export class NPCPlugin implements Plugin<typeof requiredServices> {
    *
    * @returns Promise that resolves when the sync completes
    */
-  async sync(): Promise<void> {
+  async sync(): Promise<NPCSyncReport> {
     const isReady = await this.waitUntilReady();
-    if (!isReady) return;
+    if (!isReady) return this.getLastSyncReport();
 
-    await this.requestSync("manual");
+    return this.requestSync("manual");
   }
 
   /**
@@ -354,18 +429,20 @@ export class NPCPlugin implements Plugin<typeof requiredServices> {
     }, this.intervalMs);
   }
 
-  private async requestSync(trigger: SyncTrigger): Promise<void> {
-    if (!this.isReady || this.isShuttingDown) return;
+  private async requestSync(trigger: SyncTrigger): Promise<NPCSyncReport> {
+    if (!this.isReady || this.isShuttingDown) {
+      return this.getLastSyncReport();
+    }
 
     // If already running, mark pending update and return existing promise
     if (this.isRunning) {
       this.hasPendingUpdate = true;
-      return this.runPromise ?? Promise.resolve();
+      return this.runPromise ?? Promise.resolve(this.getLastSyncReport());
     }
 
     this.hasPendingUpdate = true;
     this.startRunner(trigger);
-    return this.runPromise ?? Promise.resolve();
+    return this.runPromise ?? Promise.resolve(this.getLastSyncReport());
   }
 
   private startRunner(trigger: SyncTrigger): void {
@@ -374,10 +451,11 @@ export class NPCPlugin implements Plugin<typeof requiredServices> {
 
     this.isRunning = true;
     this.runPromise = (async () => {
+      let report = this.getLastSyncReport();
       try {
         do {
           this.hasPendingUpdate = false;
-          await this.syncPaidQuotesOnce({
+          report = await this.syncPaidQuotesOnce({
             mintOperationService: ctx.services.mintOperationService,
             mintService: ctx.services.mintService,
             trigger,
@@ -394,6 +472,7 @@ export class NPCPlugin implements Plugin<typeof requiredServices> {
         this.isRunning = false;
         this.runPromise = undefined;
       }
+      return report;
     })();
   }
 
@@ -405,9 +484,10 @@ export class NPCPlugin implements Plugin<typeof requiredServices> {
       typeof requiredServices
     >["services"]["mintService"];
     trigger: SyncTrigger;
-  }): Promise<void> {
+  }): Promise<NPCSyncReport> {
     const { mintOperationService, mintService, trigger } = options;
     const since = await this.sinceStore.get();
+    const emptyReport = this.createSyncReport({ since, newSince: since });
 
     this.logger?.debug?.(formatLogMessage("Starting sync", { since, trigger }));
 
@@ -415,7 +495,8 @@ export class NPCPlugin implements Plugin<typeof requiredServices> {
 
     if (!rawQuotes || rawQuotes.length === 0) {
       this.logger?.debug?.("No new quotes");
-      return;
+      this.lastSyncReport = emptyReport;
+      return this.getLastSyncReport();
     }
 
     // Validate and filter quotes
@@ -458,7 +539,8 @@ export class NPCPlugin implements Plugin<typeof requiredServices> {
 
     if (quotes.length === 0) {
       this.logger?.debug?.("No valid quotes after filtering");
-      return;
+      this.lastSyncReport = emptyReport;
+      return this.getLastSyncReport();
     }
 
     quotes.sort((a, b) => {
@@ -495,24 +577,43 @@ export class NPCPlugin implements Plugin<typeof requiredServices> {
           request: quote.request ?? "",
         }));
 
+        let mintAllowed = false;
+        let mintPrepareError: string | undefined;
         try {
-          await mintService.addMintByUrl(mintUrl, { trusted: true });
+          mintAllowed = await this.prepareMintForQuoteImport(
+            mintService,
+            mintUrl,
+          );
         } catch (err) {
+          mintPrepareError = String(err);
           this.logger?.error?.(
-            formatLogMessage("Failed to add trusted mint for quotes", {
-              err: String(err),
+            formatLogMessage("Failed to prepare mint for quotes", {
+              err: mintPrepareError,
               mintUrl,
               quoteCount: list.length,
+              policyMode: this.quoteMintPolicy.mode,
             }),
           );
+        }
+
+        if (!mintAllowed) {
           for (const quote of list) {
             results.push({
               mintUrl,
               quoteId: quote.quoteId,
               paidAt: quote.paidAt,
-              status: "failed",
+              status: mintPrepareError ? "failed" : "blocked",
+              error: mintPrepareError,
             });
           }
+          this.logger?.warn?.(
+            formatLogMessage("Skipped quotes before import", {
+              mintUrl,
+              quoteCount: list.length,
+              policyMode: this.quoteMintPolicy.mode,
+              reason: mintPrepareError ? "mint-prepare-failed" : "blocked",
+            }),
+          );
           return results;
         }
 
@@ -559,6 +660,7 @@ export class NPCPlugin implements Plugin<typeof requiredServices> {
               quoteId: transformedQuote.quoteId,
               paidAt: transformedQuote.paidAt,
               status: "failed",
+              error: String(err),
             });
             this.logger?.error?.(
               formatLogMessage("Failed to import quote", {
@@ -580,6 +682,8 @@ export class NPCPlugin implements Plugin<typeof requiredServices> {
               .length,
             failed: results.filter((result) => result.status === "failed")
               .length,
+            blocked: results.filter((result) => result.status === "blocked")
+              .length,
           }),
         );
 
@@ -588,8 +692,11 @@ export class NPCPlugin implements Plugin<typeof requiredServices> {
     );
 
     const quoteResults = mintResults.flat();
-    const failedPaidAt = quoteResults
-      .filter((result) => result.status === "failed")
+    const unresolvedPaidAt = quoteResults
+      .filter(
+        (result) =>
+          result.status === "failed" || result.status === "blocked",
+      )
       .reduce<number | undefined>((min, result) => {
         if (min === undefined) {
           return result.paidAt;
@@ -599,7 +706,7 @@ export class NPCPlugin implements Plugin<typeof requiredServices> {
 
     let safeSince = since;
     for (const result of quoteResults) {
-      if (failedPaidAt !== undefined && result.paidAt >= failedPaidAt) {
+      if (unresolvedPaidAt !== undefined && result.paidAt >= unresolvedPaidAt) {
         continue;
       }
       safeSince = Math.max(safeSince, result.paidAt);
@@ -625,17 +732,119 @@ export class NPCPlugin implements Plugin<typeof requiredServices> {
     const failedCount = quoteResults.filter(
       (result) => result.status === "failed",
     ).length;
+    const blockedQuotes = quoteResults
+      .filter((result) => result.status === "blocked")
+      .map((result) => ({
+        mintUrl: result.mintUrl,
+        quoteId: result.quoteId,
+        paidAt: result.paidAt,
+      }));
+    const failedQuotes = quoteResults
+      .filter((result) => result.status === "failed")
+      .map((result) => ({
+        mintUrl: result.mintUrl,
+        quoteId: result.quoteId,
+        paidAt: result.paidAt,
+        error: result.error ?? "Unknown error",
+      }));
 
-    if (failedCount > 0) {
+    this.lastSyncReport = this.createSyncReport({
+      since,
+      newSince: safeSince,
+      importedCount,
+      skippedCount,
+      failedCount,
+      blockedQuotes,
+      failedQuotes,
+    });
+
+    if (failedCount > 0 || blockedQuotes.length > 0) {
       this.logger?.warn?.(
-        formatLogMessage("Sync completed with quote failures", {
+        formatLogMessage("Sync completed with unresolved quotes", {
           trigger,
           imported: importedCount,
           skipped: skippedCount,
           failed: failedCount,
+          blocked: blockedQuotes.length,
+          unresolvedWatermark: unresolvedPaidAt,
           safeSince,
         }),
       );
     }
+
+    return this.getLastSyncReport();
+  }
+
+  private createSyncReport(options: {
+    since: number;
+    newSince: number;
+    importedCount?: number;
+    skippedCount?: number;
+    failedCount?: number;
+    blockedQuotes?: NPCBlockedQuote[];
+    failedQuotes?: NPCFailedQuote[];
+  }): NPCSyncReport {
+    return {
+      since: options.since,
+      newSince: options.newSince,
+      importedCount: options.importedCount ?? 0,
+      skippedCount: options.skippedCount ?? 0,
+      failedCount: options.failedCount ?? 0,
+      blockedQuotes: options.blockedQuotes ?? [],
+      failedQuotes: options.failedQuotes ?? [],
+    };
+  }
+
+  private async prepareMintForQuoteImport(
+    mintService: PluginContext<
+      typeof requiredServices
+    >["services"]["mintService"],
+    mintUrl: string,
+  ): Promise<boolean> {
+    switch (this.quoteMintPolicy.mode) {
+      case "trusted-only":
+        return this.isTrustedMint(mintService, mintUrl);
+      case "allow-list":
+        if (!this.quoteMintPolicy.mintUrls.includes(mintUrl)) {
+          return false;
+        }
+        await this.cacheMintWithoutTrusting(mintService, mintUrl);
+        return true;
+      case "auto-trust":
+        await mintService.addMintByUrl(mintUrl, { trusted: true });
+        return true;
+    }
+  }
+
+  private async isTrustedMint(
+    mintService: PluginContext<
+      typeof requiredServices
+    >["services"]["mintService"],
+    mintUrl: string,
+  ): Promise<boolean> {
+    if (typeof mintService.isTrustedMint !== "function") {
+      return false;
+    }
+
+    try {
+      return await mintService.isTrustedMint(mintUrl);
+    } catch (err) {
+      this.logger?.warn?.(
+        formatLogMessage("Unable to determine mint trust", {
+          err: String(err),
+          mintUrl,
+        }),
+      );
+      return false;
+    }
+  }
+
+  private async cacheMintWithoutTrusting(
+    mintService: PluginContext<
+      typeof requiredServices
+    >["services"]["mintService"],
+    mintUrl: string,
+  ): Promise<void> {
+    await mintService.addMintByUrl(mintUrl);
   }
 }
