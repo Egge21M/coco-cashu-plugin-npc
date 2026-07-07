@@ -1,7 +1,10 @@
-import { getEncodedToken, type PaymentRequestService } from "coco-cashu-core";
+import { getEncodedToken } from "@cashu/coco-core";
 import { PaymentRequiredError } from "npubcash-sdk";
 
-import type { NPCAccountRuntime } from "./accounts/NPCAccountRuntime";
+import type {
+  NPCAccountRuntime,
+  NPCPluginContext,
+} from "./accounts/NPCAccountRuntime";
 import type { NPCPlugin } from "./plugins/NPCPlugin";
 import type {
   AddNPCAccountOptions,
@@ -56,11 +59,15 @@ export class NPCPluginApi {
 export class NPCAccountApi {
   readonly id: string;
 
-  private readonly getPrService: () => PaymentRequestService;
+  private readonly getPrService: () => NPCPluginContext["services"][
+    "paymentRequestService"
+  ];
   private readonly runtime: NPCAccountRuntime;
 
   constructor(
-    getPrService: () => PaymentRequestService,
+    getPrService: () => NPCPluginContext["services"][
+      "paymentRequestService"
+    ],
     runtime: NPCAccountRuntime,
   ) {
     this.id = runtime.id;
@@ -92,18 +99,22 @@ export class NPCAccountApi {
       const creq = e.paymentRequest.toEncodedRequest();
       if (attemptPayment) {
         const prService = this.getPrService();
-        const cocoReq = await prService.processPaymentRequest(creq);
-        if (!cocoReq.matchingMints[0]) {
+        const cocoReq = await prService.parse(creq);
+        const mintUrl = cocoReq.payableMints[0];
+        if (!mintUrl) {
           return { success: false, pr: e.paymentRequest };
         }
-        const tx = await prService.preparePaymentRequestTransaction(
-          cocoReq.matchingMints[0],
-          cocoReq,
-        );
-        await prService.handleInbandPaymentRequest(tx, async (token) => {
-          const tokenString = getEncodedToken(token);
-          await this.runtime.client.setUsername(username, tokenString);
-        });
+        const inbandReq = {
+          ...cocoReq,
+          transport: { type: "inband" as const },
+        };
+        const tx = await prService.prepare(inbandReq, { mintUrl });
+        const result = await prService.execute(tx);
+        if (result.type !== "inband") {
+          throw new Error("Expected inband payment request execution result");
+        }
+        const tokenString = getEncodedToken(result.token);
+        await this.runtime.client.setUsername(username, tokenString);
         return {
           success: true,
         };

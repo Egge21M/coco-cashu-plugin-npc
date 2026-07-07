@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { PaymentRequiredError } from "npubcash-sdk";
 
 import { NPCPluginApi } from "../src/PluginApi";
 import { NPCPlugin } from "../src/plugins/NPCPlugin";
@@ -12,6 +13,12 @@ import {
 } from "./helpers";
 
 describe("NPCPluginApi", () => {
+  function makePaymentRequiredError(): PaymentRequiredError {
+    return new PaymentRequiredError("payment required", {
+      toEncodedRequest: () => "creq-test",
+    } as unknown as ConstructorParameters<typeof PaymentRequiredError>[1]);
+  }
+
   it("adds an account and returns an account API", async () => {
     const plugin = new NPCPlugin();
     const { ctx } = createMockContext();
@@ -25,6 +32,123 @@ describe("NPCPluginApi", () => {
 
     expect(account.id).toBe("account-1");
     expect(typeof account.sync).toBe("function");
+  });
+
+  it("forces username payment requests through inband execution and submits the token", async () => {
+    const plugin = new NPCPlugin();
+    const { services } = createMockServices();
+    const prepareRequests: unknown[] = [];
+    const submittedTokens: string[] = [];
+
+    services.paymentRequestService = {
+      parse: async () => ({
+        paymentRequest: {},
+        payableMints: ["https://mint.a"],
+        allowedMints: [],
+        unit: "sat",
+        transport: { type: "http", url: "https://merchant.example.com/pr" },
+      }),
+      prepare: async (request: unknown) => {
+        prepareRequests.push(request);
+        return { request, sendOperation: { id: "send-1" } };
+      },
+      execute: async (tx: { request: unknown }) => {
+        expect(tx.request).toMatchObject({ transport: { type: "inband" } });
+        return {
+          type: "inband",
+          token: { mint: "https://mint.a", proofs: [] },
+          operation: { id: "send-1", state: "pending" },
+          request: tx.request,
+        };
+      },
+    };
+
+    const ctx = {
+      services,
+      registerExtension: () => {},
+    };
+
+    plugin.onInit(ctx as unknown as Parameters<typeof plugin.onInit>[0]);
+    const account = await plugin.addAccount({
+      id: "account-1",
+      signer: createMockSigner(),
+      baseUrl: "https://npc.example.com",
+    });
+
+    const runtime = getAccountRuntime(plugin);
+    let calls = 0;
+    (runtime as unknown as { client: unknown }).client = {
+      setUsername: async (_username: string, token?: string) => {
+        calls += 1;
+        if (!token) {
+          throw makePaymentRequiredError();
+        }
+        submittedTokens.push(token);
+      },
+    };
+
+    await expect(account.setUsername("alice", true)).resolves.toEqual({
+      success: true,
+    });
+
+    expect(calls).toBe(2);
+    expect(prepareRequests).toHaveLength(1);
+    expect(prepareRequests[0]).toMatchObject({
+      transport: { type: "inband" },
+    });
+    expect(submittedTokens).toEqual([
+      "cashuBo2Ftbmh0dHBzOi8vbWludC5hYXVjc2F0YXSA",
+    ]);
+  });
+
+  it("does not execute username payment requests when no payable mint exists", async () => {
+    const plugin = new NPCPlugin();
+    const { services } = createMockServices();
+    let prepared = false;
+    let executed = false;
+
+    services.paymentRequestService = {
+      parse: async () => ({
+        paymentRequest: {},
+        payableMints: [],
+        allowedMints: [],
+        unit: "sat",
+        transport: { type: "inband" },
+      }),
+      prepare: async () => {
+        prepared = true;
+        return {};
+      },
+      execute: async () => {
+        executed = true;
+        return {};
+      },
+    };
+
+    const ctx = {
+      services,
+      registerExtension: () => {},
+    };
+
+    plugin.onInit(ctx as unknown as Parameters<typeof plugin.onInit>[0]);
+    const account = await plugin.addAccount({
+      id: "account-1",
+      signer: createMockSigner(),
+      baseUrl: "https://npc.example.com",
+    });
+
+    const runtime = getAccountRuntime(plugin);
+    (runtime as unknown as { client: unknown }).client = {
+      setUsername: async () => {
+        throw makePaymentRequiredError();
+      },
+    };
+
+    const result = await account.setUsername("alice", true);
+
+    expect(result.success).toBe(false);
+    expect(prepared).toBe(false);
+    expect(executed).toBe(false);
   });
 
   it("exposes account management through the registered extension", async () => {

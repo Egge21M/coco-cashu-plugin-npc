@@ -1,4 +1,5 @@
-import type { PluginContext } from "coco-cashu-core";
+import { Amount } from "@cashu/coco-core";
+import type { PluginContext } from "@cashu/coco-core/plugin";
 import { JWTAuthProvider, NPCClient } from "npubcash-sdk";
 
 import type { SinceStore } from "../sync/sinceStore";
@@ -18,6 +19,7 @@ import {
 export const npcRequiredServices = [
   "mintOperationService",
   "mintService",
+  "quotes",
   "paymentRequestService",
   "eventBus",
 ] as const;
@@ -394,6 +396,7 @@ export class NPCAccountRuntime {
           await this.syncPaidQuotesOnce({
             mintOperationService: ctx.services.mintOperationService,
             mintService: ctx.services.mintService,
+            quoteApi: ctx.services.quotes,
             trigger,
           });
         } while (this.hasPendingUpdate && !this.isShuttingDown);
@@ -418,9 +421,10 @@ export class NPCAccountRuntime {
   private async syncPaidQuotesOnce(options: {
     mintOperationService: NPCPluginContext["services"]["mintOperationService"];
     mintService: NPCPluginContext["services"]["mintService"];
+    quoteApi: NPCPluginContext["services"]["quotes"];
     trigger: SyncTrigger;
   }): Promise<void> {
-    const { mintOperationService, mintService, trigger } = options;
+    const { mintOperationService, mintService, quoteApi, trigger } = options;
     const since = await this.sinceStore.get();
 
     this.logger?.debug?.(
@@ -506,14 +510,6 @@ export class NPCAccountRuntime {
     const mintResults = await Promise.all(
       Array.from(mintUrlToQuotes.entries()).map(async ([mintUrl, list]) => {
         const results: QuoteSyncResult[] = [];
-        const transformedQuotes = list.map((quote) => ({
-          ...quote,
-          unit: QUOTE_DEFAULTS.UNIT,
-          expiry: quote.expiresAt,
-          state: QUOTE_DEFAULTS.STATE_PAID,
-          quote: quote.quoteId,
-          request: quote.request ?? "",
-        }));
 
         try {
           await mintService.addMintByUrl(mintUrl, { trusted: true });
@@ -537,38 +533,60 @@ export class NPCAccountRuntime {
           return results;
         }
 
-        for (let i = 0; i < transformedQuotes.length; i++) {
-          const transformedQuote = transformedQuotes[i];
-          if (!transformedQuote) {
-            continue;
-          }
+        for (const quote of list) {
+          try {
+            const transformedQuote = {
+              ...quote,
+              amount: Amount.from(quote.amount),
+              unit: QUOTE_DEFAULTS.UNIT,
+              expiry: quote.expiresAt,
+              state: QUOTE_DEFAULTS.STATE_PAID,
+              quote: quote.quoteId,
+              request: quote.request ?? "",
+            };
 
-          const existing = await mintOperationService.getOperationByQuote(
-            mintUrl,
-            transformedQuote.quote,
-          );
-
-          if (existing && existing.state !== "init") {
-            results.push({
+            const existing = await mintOperationService.getOperationByQuote(
               mintUrl,
-              quoteId: transformedQuote.quoteId,
-              paidAt: transformedQuote.paidAt,
-              status: "skipped",
-            });
-            this.logger?.debug?.(
-              formatLogMessage("Skipping already-tracked quote", {
+              "bolt11",
+              transformedQuote.quote,
+            );
+
+            if (existing && existing.state !== "init") {
+              results.push({
                 mintUrl,
                 quoteId: transformedQuote.quoteId,
-                operationId: existing.id,
-                state: existing.state,
-                accountId: this.id,
-              }),
-            );
-            continue;
-          }
+                paidAt: transformedQuote.paidAt,
+                status: "skipped",
+              });
+              this.logger?.debug?.(
+                formatLogMessage("Skipping already-tracked quote", {
+                  mintUrl,
+                  quoteId: transformedQuote.quoteId,
+                  operationId: existing.id,
+                  state: existing.state,
+                  accountId: this.id,
+                }),
+              );
+              continue;
+            }
 
-          try {
-            await mintOperationService.importQuote(mintUrl, transformedQuote);
+            await quoteApi.mint.import({
+              mintUrl,
+              method: "bolt11",
+              quote: transformedQuote,
+            });
+            const operation =
+              existing?.state === "init"
+                ? await this.prepareExistingMintOperation(existing.id)
+                : await mintOperationService.prepare(
+                    {
+                      mintUrl,
+                      method: "bolt11",
+                      quoteId: transformedQuote.quote,
+                    },
+                    transformedQuote.amount,
+                  );
+            await mintOperationService.execute(operation.id);
             results.push({
               mintUrl,
               quoteId: transformedQuote.quoteId,
@@ -578,15 +596,15 @@ export class NPCAccountRuntime {
           } catch (err) {
             results.push({
               mintUrl,
-              quoteId: transformedQuote.quoteId,
-              paidAt: transformedQuote.paidAt,
+              quoteId: quote.quoteId,
+              paidAt: quote.paidAt,
               status: "failed",
             });
             this.logger?.error?.(
               formatLogMessage("Failed to import quote", {
                 err: String(err),
                 mintUrl,
-                quoteId: transformedQuote.quoteId,
+                quoteId: quote.quoteId,
                 accountId: this.id,
               }),
             );
@@ -662,5 +680,21 @@ export class NPCAccountRuntime {
         }),
       );
     }
+  }
+
+  private async prepareExistingMintOperation(
+    operationId: string,
+  ): Promise<{ id: string }> {
+    const service = this.ctx?.services.mintOperationService as unknown as {
+      prepareInitOperation?: (operationId: string) => Promise<{ id: string }>;
+    };
+
+    if (typeof service.prepareInitOperation !== "function") {
+      throw new Error(
+        "Mint operation service cannot prepare existing init operations in this @cashu/coco-core RC",
+      );
+    }
+
+    return service.prepareInitOperation(operationId);
   }
 }

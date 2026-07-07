@@ -21,13 +21,36 @@ function createContext(calls: {
         },
       },
       mintOperationService: {
-        getOperationByQuote: async (_url: string, quoteId: string) => {
+        getOperationByQuote: async (
+          _url: string,
+          _method: string,
+          quoteId: string,
+        ) => {
           calls.lookupQuote?.push(quoteId);
           return undefined;
         },
-        importQuote: async (url: string, quote: unknown) => {
-          calls.importAttempt?.push(String((quote as { quoteId?: string }).quoteId));
-          calls.importQuote?.push({ url, quote });
+        prepare: async (quoteRef: { quoteId: string }) => ({
+          id: `op-${quoteRef.quoteId}`,
+          state: "pending",
+        }),
+        execute: async (operationId: string) => ({
+          id: operationId,
+          state: "finalized",
+        }),
+        prepareInitOperation: async (operationId: string) => ({
+          id: operationId,
+          state: "pending",
+        }),
+      },
+      quotes: {
+        mint: {
+          import: async (input: { mintUrl: string; quote: unknown }) => {
+            const { mintUrl, quote } = input;
+            calls.importAttempt?.push(
+              String((quote as { quoteId?: string }).quoteId),
+            );
+            calls.importQuote?.push({ url: mintUrl, quote });
+          },
         },
       },
       paymentRequestService: {},
@@ -171,6 +194,82 @@ describe("NPC account sync mapping", () => {
     expect(warnings.length).toBe(2);
   });
 
+  it("fails quotes with malformed amounts without aborting the mint batch", async () => {
+    const errors: string[] = [];
+    const warnings: string[] = [];
+    const calls = {
+      importQuote: [] as { url: string; quote: unknown }[],
+      lookupQuote: [] as string[],
+      setSince: [] as number[],
+    };
+
+    const sinceStore = {
+      get: async () => 0,
+      set: async (since: number) => {
+        calls.setSince.push(since);
+      },
+    };
+
+    const plugin = new NPCPlugin({
+      logger: {
+        warn: (data: unknown) => {
+          warnings.push(String(data));
+        },
+        error: (data: unknown) => {
+          errors.push(String(data));
+        },
+        info: () => {},
+        debug: () => {},
+      },
+    });
+    const ctx = createContext(calls);
+    plugin.onInit(ctx as Parameters<typeof plugin.onInit>[0]);
+    const account = await plugin.addAccount({
+      id: "account-1",
+      signer: createMockSigner(),
+      baseUrl: "https://npc.example.com",
+      sinceStore,
+    });
+    plugin.onReady();
+
+    const runtime = getAccountRuntime(plugin);
+    (runtime as unknown as { client: unknown }).client = {
+      getQuotesSince: async () => [
+        {
+          mintUrl: "https://mint.a",
+          quoteId: "q1",
+          paidAt: 100,
+          expiresAt: 200,
+          amount: 50,
+        },
+        {
+          mintUrl: "https://mint.a",
+          quoteId: "q2",
+          paidAt: 150,
+          expiresAt: 250,
+        },
+      ],
+    };
+
+    await account.sync();
+
+    const importedQuoteIds = calls.importQuote.map((entry) => {
+      const quote = entry.quote as Record<string, unknown>;
+      return quote.quoteId;
+    });
+
+    expect(importedQuoteIds).toEqual(["q1"]);
+    expect(calls.lookupQuote).toEqual(["q1"]);
+    expect(calls.setSince).toEqual([100]);
+    expect(
+      warnings.some((message) =>
+        message.includes("Sync completed with quote failures"),
+      ),
+    ).toBe(true);
+    expect(errors.some((message) => message.includes("Failed to import quote")))
+      .toBe(true);
+  });
+
   it("advances since only to the safe watermark and skips already-tracked retries", async () => {
     const warnings: string[] = [];
     const errors: string[] = [];
@@ -213,24 +312,41 @@ describe("NPC account sync mapping", () => {
           addMintByUrl: async () => {},
         },
         mintOperationService: {
-          getOperationByQuote: async (_url: string, quoteId: string) => {
+          getOperationByQuote: async (
+            _url: string,
+            _method: string,
+            quoteId: string,
+          ) => {
             calls.lookupQuote.push(quoteId);
             return trackedQuotes.get(quoteId);
           },
-          importQuote: async (url: string, quote: unknown) => {
-            const record = quote as Record<string, unknown>;
-            calls.importAttempt.push(String(record.quoteId));
-            if (record.quoteId === "q2") {
-              throw new Error("boom");
-            }
-            trackedQuotes.set(String(record.quoteId), {
-              id: `op-${String(record.quoteId)}`,
-              state: "finalized",
-            });
-            calls.importQuote.push({
-              url,
-              quote: record,
-            });
+          prepare: async (quoteRef: { quoteId: string }) => ({
+            id: `op-${quoteRef.quoteId}`,
+            state: "pending",
+          }),
+          execute: async (operationId: string) => ({
+            id: operationId,
+            state: "finalized",
+          }),
+        },
+        quotes: {
+          mint: {
+            import: async (input: { mintUrl: string; quote: unknown }) => {
+              const { mintUrl, quote } = input;
+              const record = quote as Record<string, unknown>;
+              calls.importAttempt.push(String(record.quoteId));
+              if (record.quoteId === "q2") {
+                throw new Error("boom");
+              }
+              trackedQuotes.set(String(record.quoteId), {
+                id: `op-${String(record.quoteId)}`,
+                state: "finalized",
+              });
+              calls.importQuote.push({
+                url: mintUrl,
+                quote: record,
+              });
+            },
           },
         },
         paymentRequestService: {},
@@ -341,11 +457,32 @@ describe("NPC account sync mapping", () => {
           addMintByUrl: async () => {},
         },
         mintOperationService: {
-          getOperationByQuote: async (_url: string, quoteId: string) =>
+          getOperationByQuote: async (
+            _url: string,
+            _method: string,
+            quoteId: string,
+          ) =>
             existingByQuote.get(quoteId),
-          importQuote: async (_url: string, quote: unknown) => {
-            const record = quote as Record<string, unknown>;
-            calls.importAttempt.push(String(record.quoteId));
+          prepare: async (quoteRef: { quoteId: string }) => ({
+            id: `op-${quoteRef.quoteId}`,
+            state: "pending",
+          }),
+          execute: async (operationId: string) => ({
+            id: operationId,
+            state: "finalized",
+          }),
+          prepareInitOperation: async (operationId: string) => ({
+            id: operationId,
+            state: "pending",
+          }),
+        },
+        quotes: {
+          mint: {
+            import: async (input: { quote: unknown }) => {
+              const { quote } = input;
+              const record = quote as Record<string, unknown>;
+              calls.importAttempt.push(String(record.quoteId));
+            },
           },
         },
         paymentRequestService: {},

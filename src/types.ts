@@ -1,4 +1,4 @@
-import type { Logger } from "coco-cashu-core";
+import type { Logger } from "@cashu/coco-core";
 import type { JWTAuthProvider, PaymentRequiredError } from "npubcash-sdk";
 
 import type { SinceStore } from "./sync/sinceStore";

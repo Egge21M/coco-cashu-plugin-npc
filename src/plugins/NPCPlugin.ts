@@ -1,4 +1,4 @@
-import type { Plugin } from "coco-cashu-core";
+import type { Plugin } from "@cashu/coco-core/plugin";
 
 import {
   NPCAccountRuntime,
@@ -43,7 +43,7 @@ interface AccountEntry {
 }
 
 /**
- * NPubCash plugin for coco-cashu-core.
+ * NPubCash plugin for @cashu/coco-core.
  *
  * The plugin owns host-level registration while account runtimes own NPC
  * clients, signers, timers, websocket subscriptions, and quote sync state.
