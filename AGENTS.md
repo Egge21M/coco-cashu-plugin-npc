@@ -4,7 +4,7 @@ Guidance for coding agents working in `coco-cashu-plugin-npc`.
 
 ## Project Snapshot
 
-- TypeScript library for integrating NPubCash with `coco-cashu-core`.
+- TypeScript library for integrating NPubCash with `@cashu/coco-core`.
 - Runtime/tooling is Bun-based; builds use `tsdown` and types use `tsc`.
 - Main source lives in `src/`; tests live in `tests/`.
 - Public exports are defined in `src/index.ts`.
@@ -29,7 +29,7 @@ Guidance for coding agents working in `coco-cashu-plugin-npc`.
 - `src/PluginApi.ts`: host-facing API wrapper around payment and NPC clients.
 - `src/sync/sinceStore.ts`: persistence abstractions and default store implementations.
 - `src/types.ts`: shared types, validation helpers, logger helpers, constants.
-- `src/index.ts`: package barrel exports and `coco-cashu-core` module augmentation.
+- `src/index.ts`: package barrel exports and `@cashu/coco-core` module augmentation.
 - `tests/*.test.ts`: Bun tests for exports, sync behavior, stores, and plugin lifecycle.
 
 ## Install And Setup
@@ -145,7 +145,7 @@ Guidance for coding agents working in `coco-cashu-plugin-npc`.
 
 - Do not hand-edit `dist/`; regenerate it with `bun run build` if needed.
 - Keep module augmentation in `src/index.ts` aligned with the extension name registered in `NPCPlugin`.
-- Preserve compatibility with `coco-cashu-core` and `npubcash-sdk` peer/runtime expectations.
+- Preserve compatibility with `@cashu/coco-core` and `npubcash-sdk` peer/runtime expectations.
 - Avoid broad refactors unless the task calls for them; this is a small library with tight behavior.
 - Prefer small, explicit changes and keep tests close to the changed behavior.
 

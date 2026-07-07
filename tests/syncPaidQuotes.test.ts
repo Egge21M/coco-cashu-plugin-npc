@@ -21,12 +21,36 @@ function createContext(calls: {
         },
       },
       mintOperationService: {
-        getOperationByQuote: async (_url: string, quoteId: string) => {
+        getOperationByQuote: async (
+          _url: string,
+          _method: string,
+          quoteId: string,
+        ) => {
           calls.lookupQuote?.push(quoteId);
           return undefined;
         },
-        importQuote: async (url: string, quote: unknown) => {
-          calls.importAttempt?.push(String((quote as { quoteId?: string }).quoteId));
+        prepare: async (quoteRef: { quoteId: string }) => ({
+          id: `op-${quoteRef.quoteId}`,
+          state: "pending",
+        }),
+        execute: async (operationId: string) => ({
+          id: operationId,
+          state: "finalized",
+        }),
+        prepareInitOperation: async (operationId: string) => ({
+          id: operationId,
+          state: "pending",
+        }),
+      },
+      quoteLifecycle: {
+        importMintQuote: async (
+          url: string,
+          _method: string,
+          quote: unknown,
+        ) => {
+          calls.importAttempt?.push(
+            String((quote as { quoteId?: string }).quoteId),
+          );
           calls.importQuote?.push({ url, quote });
         },
       },
@@ -213,11 +237,29 @@ describe("NPC account sync mapping", () => {
           addMintByUrl: async () => {},
         },
         mintOperationService: {
-          getOperationByQuote: async (_url: string, quoteId: string) => {
+          getOperationByQuote: async (
+            _url: string,
+            _method: string,
+            quoteId: string,
+          ) => {
             calls.lookupQuote.push(quoteId);
             return trackedQuotes.get(quoteId);
           },
-          importQuote: async (url: string, quote: unknown) => {
+          prepare: async (quoteRef: { quoteId: string }) => ({
+            id: `op-${quoteRef.quoteId}`,
+            state: "pending",
+          }),
+          execute: async (operationId: string) => ({
+            id: operationId,
+            state: "finalized",
+          }),
+        },
+        quoteLifecycle: {
+          importMintQuote: async (
+            url: string,
+            _method: string,
+            quote: unknown,
+          ) => {
             const record = quote as Record<string, unknown>;
             calls.importAttempt.push(String(record.quoteId));
             if (record.quoteId === "q2") {
@@ -341,9 +383,31 @@ describe("NPC account sync mapping", () => {
           addMintByUrl: async () => {},
         },
         mintOperationService: {
-          getOperationByQuote: async (_url: string, quoteId: string) =>
+          getOperationByQuote: async (
+            _url: string,
+            _method: string,
+            quoteId: string,
+          ) =>
             existingByQuote.get(quoteId),
-          importQuote: async (_url: string, quote: unknown) => {
+          prepare: async (quoteRef: { quoteId: string }) => ({
+            id: `op-${quoteRef.quoteId}`,
+            state: "pending",
+          }),
+          execute: async (operationId: string) => ({
+            id: operationId,
+            state: "finalized",
+          }),
+          prepareInitOperation: async (operationId: string) => ({
+            id: operationId,
+            state: "pending",
+          }),
+        },
+        quoteLifecycle: {
+          importMintQuote: async (
+            _url: string,
+            _method: string,
+            quote: unknown,
+          ) => {
             const record = quote as Record<string, unknown>;
             calls.importAttempt.push(String(record.quoteId));
           },

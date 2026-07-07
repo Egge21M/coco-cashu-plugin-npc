@@ -1,4 +1,5 @@
-import type { PluginContext } from "coco-cashu-core";
+import { Amount, type MintMethodQuoteSnapshot } from "@cashu/coco-core";
+import type { PluginContext, ServiceKey } from "@cashu/coco-core/plugin";
 import { JWTAuthProvider, NPCClient } from "npubcash-sdk";
 
 import type { SinceStore } from "../sync/sinceStore";
@@ -15,14 +16,37 @@ import {
   isValidUrl,
 } from "../types";
 
-export const npcRequiredServices = [
+const npcPublicRequiredServices = [
   "mintOperationService",
   "mintService",
   "paymentRequestService",
   "eventBus",
-] as const;
+] as const satisfies readonly ServiceKey[];
 
-export type NPCPluginContext = PluginContext<typeof npcRequiredServices>;
+export type NPCPluginRequiredServices = typeof npcPublicRequiredServices;
+
+// @cashu/coco-core 2.0.0-rc.0 exposes quote import on manager.quotes, but not
+// in the public plugin ServiceMap. The runtime service exists and is selected
+// by PluginHost, so this keeps the RC migration localized until core exposes a
+// stable plugin service for canonical quote import.
+export const npcRequiredServices = [
+  ...npcPublicRequiredServices,
+  "quoteLifecycle",
+] as unknown as NPCPluginRequiredServices;
+
+interface QuoteLifecycleService {
+  importMintQuote(
+    mintUrl: string,
+    method: "bolt11",
+    quote: MintMethodQuoteSnapshot<"bolt11">,
+  ): Promise<unknown>;
+}
+
+export type NPCPluginContext = PluginContext<NPCPluginRequiredServices> & {
+  services: PluginContext<NPCPluginRequiredServices>["services"] & {
+    quoteLifecycle: QuoteLifecycleService;
+  };
+};
 
 export type SyncTrigger = "manual" | "websocket" | "interval";
 
@@ -394,6 +418,7 @@ export class NPCAccountRuntime {
           await this.syncPaidQuotesOnce({
             mintOperationService: ctx.services.mintOperationService,
             mintService: ctx.services.mintService,
+            quoteLifecycle: ctx.services.quoteLifecycle,
             trigger,
           });
         } while (this.hasPendingUpdate && !this.isShuttingDown);
@@ -418,9 +443,11 @@ export class NPCAccountRuntime {
   private async syncPaidQuotesOnce(options: {
     mintOperationService: NPCPluginContext["services"]["mintOperationService"];
     mintService: NPCPluginContext["services"]["mintService"];
+    quoteLifecycle: NPCPluginContext["services"]["quoteLifecycle"];
     trigger: SyncTrigger;
   }): Promise<void> {
-    const { mintOperationService, mintService, trigger } = options;
+    const { mintOperationService, mintService, quoteLifecycle, trigger } =
+      options;
     const since = await this.sinceStore.get();
 
     this.logger?.debug?.(
@@ -508,6 +535,7 @@ export class NPCAccountRuntime {
         const results: QuoteSyncResult[] = [];
         const transformedQuotes = list.map((quote) => ({
           ...quote,
+          amount: Amount.from(quote.amount),
           unit: QUOTE_DEFAULTS.UNIT,
           expiry: quote.expiresAt,
           state: QUOTE_DEFAULTS.STATE_PAID,
@@ -545,6 +573,7 @@ export class NPCAccountRuntime {
 
           const existing = await mintOperationService.getOperationByQuote(
             mintUrl,
+            "bolt11",
             transformedQuote.quote,
           );
 
@@ -568,7 +597,23 @@ export class NPCAccountRuntime {
           }
 
           try {
-            await mintOperationService.importQuote(mintUrl, transformedQuote);
+            await quoteLifecycle.importMintQuote(
+              mintUrl,
+              "bolt11",
+              transformedQuote,
+            );
+            const operation =
+              existing?.state === "init"
+                ? await this.prepareExistingMintOperation(existing.id)
+                : await mintOperationService.prepare(
+                    {
+                      mintUrl,
+                      method: "bolt11",
+                      quoteId: transformedQuote.quote,
+                    },
+                    transformedQuote.amount,
+                  );
+            await mintOperationService.execute(operation.id);
             results.push({
               mintUrl,
               quoteId: transformedQuote.quoteId,
@@ -662,5 +707,21 @@ export class NPCAccountRuntime {
         }),
       );
     }
+  }
+
+  private async prepareExistingMintOperation(
+    operationId: string,
+  ): Promise<{ id: string }> {
+    const service = this.ctx?.services.mintOperationService as unknown as {
+      prepareInitOperation?: (operationId: string) => Promise<{ id: string }>;
+    };
+
+    if (typeof service.prepareInitOperation !== "function") {
+      throw new Error(
+        "Mint operation service cannot prepare existing init operations in this @cashu/coco-core RC",
+      );
+    }
+
+    return service.prepareInitOperation(operationId);
   }
 }

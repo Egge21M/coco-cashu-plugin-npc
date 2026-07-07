@@ -19,6 +19,8 @@ export function createMockServices() {
   const calls = {
     addMintByUrl: [] as string[],
     importQuote: [] as { url: string; quote: unknown }[],
+    prepareMintOperation: [] as { quoteId: string; amount: unknown }[],
+    executeMintOperation: [] as string[],
   };
   const eventHandlers = new Map<string, Set<(payload?: unknown) => void>>();
   const eventBus = {
@@ -53,7 +55,27 @@ export function createMockServices() {
     },
     mintOperationService: {
       getOperationByQuote: async () => undefined,
-      importQuote: async (url: string, quote: unknown) => {
+      prepare: async (
+        quoteRef: { quoteId: string },
+        amount: unknown,
+      ) => {
+        calls.prepareMintOperation.push({
+          quoteId: quoteRef.quoteId,
+          amount,
+        });
+        return { id: `op-${quoteRef.quoteId}`, state: "pending" };
+      },
+      execute: async (operationId: string) => {
+        calls.executeMintOperation.push(operationId);
+        return { id: operationId, state: "finalized" };
+      },
+    },
+    quoteLifecycle: {
+      importMintQuote: async (
+        url: string,
+        _method: string,
+        quote: unknown,
+      ) => {
         calls.importQuote.push({ url, quote });
       },
     },

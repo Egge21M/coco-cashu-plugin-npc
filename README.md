@@ -1,12 +1,12 @@
 # coco-cashu-plugin-npc
 
 `coco-cashu-plugin-npc` integrates one or more NPubCash accounts with
-`coco-cashu-core`. It syncs paid quotes from NPC servers, converts them into
-coco mint quotes, and forwards them through the host's `mintOperationService`.
+`@cashu/coco-core`. It syncs paid quotes from NPC servers, imports them as
+coco mint quotes, and redeems them through the host's mint operation service.
 
 - Polls NPC for paid quotes since a per-account persisted timestamp
 - Optionally listens for realtime websocket updates per account
-- Groups quotes by `mintUrl` before forwarding them to coco
+- Groups quotes by `mintUrl` before importing and redeeming them through coco
 - Exposes an account-aware `npc` extension API for account management, username
   management, quote inspection, and manual sync
 
@@ -19,7 +19,7 @@ bun add coco-cashu-plugin-npc
 Install the required peer dependencies in the host app as well:
 
 ```bash
-bun add coco-cashu-core typescript
+bun add @cashu/coco-core typescript
 ```
 
 This package uses `npubcash-sdk` internally for NPC API access and JWT auth.
