@@ -194,6 +194,82 @@ describe("NPC account sync mapping", () => {
     expect(warnings.length).toBe(2);
   });
 
+  it("fails quotes with malformed amounts without aborting the mint batch", async () => {
+    const errors: string[] = [];
+    const warnings: string[] = [];
+    const calls = {
+      importQuote: [] as { url: string; quote: unknown }[],
+      lookupQuote: [] as string[],
+      setSince: [] as number[],
+    };
+
+    const sinceStore = {
+      get: async () => 0,
+      set: async (since: number) => {
+        calls.setSince.push(since);
+      },
+    };
+
+    const plugin = new NPCPlugin({
+      logger: {
+        warn: (data: unknown) => {
+          warnings.push(String(data));
+        },
+        error: (data: unknown) => {
+          errors.push(String(data));
+        },
+        info: () => {},
+        debug: () => {},
+      },
+    });
+    const ctx = createContext(calls);
+    plugin.onInit(ctx as Parameters<typeof plugin.onInit>[0]);
+    const account = await plugin.addAccount({
+      id: "account-1",
+      signer: createMockSigner(),
+      baseUrl: "https://npc.example.com",
+      sinceStore,
+    });
+    plugin.onReady();
+
+    const runtime = getAccountRuntime(plugin);
+    (runtime as unknown as { client: unknown }).client = {
+      getQuotesSince: async () => [
+        {
+          mintUrl: "https://mint.a",
+          quoteId: "q1",
+          paidAt: 100,
+          expiresAt: 200,
+          amount: 50,
+        },
+        {
+          mintUrl: "https://mint.a",
+          quoteId: "q2",
+          paidAt: 150,
+          expiresAt: 250,
+        },
+      ],
+    };
+
+    await account.sync();
+
+    const importedQuoteIds = calls.importQuote.map((entry) => {
+      const quote = entry.quote as Record<string, unknown>;
+      return quote.quoteId;
+    });
+
+    expect(importedQuoteIds).toEqual(["q1"]);
+    expect(calls.lookupQuote).toEqual(["q1"]);
+    expect(calls.setSince).toEqual([100]);
+    expect(
+      warnings.some((message) =>
+        message.includes("Sync completed with quote failures"),
+      ),
+    ).toBe(true);
+    expect(errors.some((message) => message.includes("Failed to import quote")))
+      .toBe(true);
+  });
+
   it("advances since only to the safe watermark and skips already-tracked retries", async () => {
     const warnings: string[] = [];
     const errors: string[] = [];

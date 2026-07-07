@@ -510,15 +510,6 @@ export class NPCAccountRuntime {
     const mintResults = await Promise.all(
       Array.from(mintUrlToQuotes.entries()).map(async ([mintUrl, list]) => {
         const results: QuoteSyncResult[] = [];
-        const transformedQuotes = list.map((quote) => ({
-          ...quote,
-          amount: Amount.from(quote.amount),
-          unit: QUOTE_DEFAULTS.UNIT,
-          expiry: quote.expiresAt,
-          state: QUOTE_DEFAULTS.STATE_PAID,
-          quote: quote.quoteId,
-          request: quote.request ?? "",
-        }));
 
         try {
           await mintService.addMintByUrl(mintUrl, { trusted: true });
@@ -542,38 +533,43 @@ export class NPCAccountRuntime {
           return results;
         }
 
-        for (let i = 0; i < transformedQuotes.length; i++) {
-          const transformedQuote = transformedQuotes[i];
-          if (!transformedQuote) {
-            continue;
-          }
+        for (const quote of list) {
+          try {
+            const transformedQuote = {
+              ...quote,
+              amount: Amount.from(quote.amount),
+              unit: QUOTE_DEFAULTS.UNIT,
+              expiry: quote.expiresAt,
+              state: QUOTE_DEFAULTS.STATE_PAID,
+              quote: quote.quoteId,
+              request: quote.request ?? "",
+            };
 
-          const existing = await mintOperationService.getOperationByQuote(
-            mintUrl,
-            "bolt11",
-            transformedQuote.quote,
-          );
-
-          if (existing && existing.state !== "init") {
-            results.push({
+            const existing = await mintOperationService.getOperationByQuote(
               mintUrl,
-              quoteId: transformedQuote.quoteId,
-              paidAt: transformedQuote.paidAt,
-              status: "skipped",
-            });
-            this.logger?.debug?.(
-              formatLogMessage("Skipping already-tracked quote", {
+              "bolt11",
+              transformedQuote.quote,
+            );
+
+            if (existing && existing.state !== "init") {
+              results.push({
                 mintUrl,
                 quoteId: transformedQuote.quoteId,
-                operationId: existing.id,
-                state: existing.state,
-                accountId: this.id,
-              }),
-            );
-            continue;
-          }
+                paidAt: transformedQuote.paidAt,
+                status: "skipped",
+              });
+              this.logger?.debug?.(
+                formatLogMessage("Skipping already-tracked quote", {
+                  mintUrl,
+                  quoteId: transformedQuote.quoteId,
+                  operationId: existing.id,
+                  state: existing.state,
+                  accountId: this.id,
+                }),
+              );
+              continue;
+            }
 
-          try {
             await quoteApi.mint.import({
               mintUrl,
               method: "bolt11",
@@ -600,15 +596,15 @@ export class NPCAccountRuntime {
           } catch (err) {
             results.push({
               mintUrl,
-              quoteId: transformedQuote.quoteId,
-              paidAt: transformedQuote.paidAt,
+              quoteId: quote.quoteId,
+              paidAt: quote.paidAt,
               status: "failed",
             });
             this.logger?.error?.(
               formatLogMessage("Failed to import quote", {
                 err: String(err),
                 mintUrl,
-                quoteId: transformedQuote.quoteId,
+                quoteId: quote.quoteId,
                 accountId: this.id,
               }),
             );
