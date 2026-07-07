@@ -42,16 +42,15 @@ function createContext(calls: {
           state: "pending",
         }),
       },
-      quoteLifecycle: {
-        importMintQuote: async (
-          url: string,
-          _method: string,
-          quote: unknown,
-        ) => {
-          calls.importAttempt?.push(
-            String((quote as { quoteId?: string }).quoteId),
-          );
-          calls.importQuote?.push({ url, quote });
+      quotes: {
+        mint: {
+          import: async (input: { mintUrl: string; quote: unknown }) => {
+            const { mintUrl, quote } = input;
+            calls.importAttempt?.push(
+              String((quote as { quoteId?: string }).quoteId),
+            );
+            calls.importQuote?.push({ url: mintUrl, quote });
+          },
         },
       },
       paymentRequestService: {},
@@ -254,25 +253,24 @@ describe("NPC account sync mapping", () => {
             state: "finalized",
           }),
         },
-        quoteLifecycle: {
-          importMintQuote: async (
-            url: string,
-            _method: string,
-            quote: unknown,
-          ) => {
-            const record = quote as Record<string, unknown>;
-            calls.importAttempt.push(String(record.quoteId));
-            if (record.quoteId === "q2") {
-              throw new Error("boom");
-            }
-            trackedQuotes.set(String(record.quoteId), {
-              id: `op-${String(record.quoteId)}`,
-              state: "finalized",
-            });
-            calls.importQuote.push({
-              url,
-              quote: record,
-            });
+        quotes: {
+          mint: {
+            import: async (input: { mintUrl: string; quote: unknown }) => {
+              const { mintUrl, quote } = input;
+              const record = quote as Record<string, unknown>;
+              calls.importAttempt.push(String(record.quoteId));
+              if (record.quoteId === "q2") {
+                throw new Error("boom");
+              }
+              trackedQuotes.set(String(record.quoteId), {
+                id: `op-${String(record.quoteId)}`,
+                state: "finalized",
+              });
+              calls.importQuote.push({
+                url: mintUrl,
+                quote: record,
+              });
+            },
           },
         },
         paymentRequestService: {},
@@ -402,14 +400,13 @@ describe("NPC account sync mapping", () => {
             state: "pending",
           }),
         },
-        quoteLifecycle: {
-          importMintQuote: async (
-            _url: string,
-            _method: string,
-            quote: unknown,
-          ) => {
-            const record = quote as Record<string, unknown>;
-            calls.importAttempt.push(String(record.quoteId));
+        quotes: {
+          mint: {
+            import: async (input: { quote: unknown }) => {
+              const { quote } = input;
+              const record = quote as Record<string, unknown>;
+              calls.importAttempt.push(String(record.quoteId));
+            },
           },
         },
         paymentRequestService: {},

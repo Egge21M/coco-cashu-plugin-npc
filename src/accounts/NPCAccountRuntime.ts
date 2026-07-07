@@ -1,5 +1,5 @@
-import { Amount, type MintMethodQuoteSnapshot } from "@cashu/coco-core";
-import type { PluginContext, ServiceKey } from "@cashu/coco-core/plugin";
+import { Amount } from "@cashu/coco-core";
+import type { PluginContext } from "@cashu/coco-core/plugin";
 import { JWTAuthProvider, NPCClient } from "npubcash-sdk";
 
 import type { SinceStore } from "../sync/sinceStore";
@@ -16,37 +16,15 @@ import {
   isValidUrl,
 } from "../types";
 
-const npcPublicRequiredServices = [
+export const npcRequiredServices = [
   "mintOperationService",
   "mintService",
+  "quotes",
   "paymentRequestService",
   "eventBus",
-] as const satisfies readonly ServiceKey[];
+] as const;
 
-export type NPCPluginRequiredServices = typeof npcPublicRequiredServices;
-
-// @cashu/coco-core 2.0.0-rc.0 exposes quote import on manager.quotes, but not
-// in the public plugin ServiceMap. The runtime service exists and is selected
-// by PluginHost, so this keeps the RC migration localized until core exposes a
-// stable plugin service for canonical quote import.
-export const npcRequiredServices = [
-  ...npcPublicRequiredServices,
-  "quoteLifecycle",
-] as unknown as NPCPluginRequiredServices;
-
-interface QuoteLifecycleService {
-  importMintQuote(
-    mintUrl: string,
-    method: "bolt11",
-    quote: MintMethodQuoteSnapshot<"bolt11">,
-  ): Promise<unknown>;
-}
-
-export type NPCPluginContext = PluginContext<NPCPluginRequiredServices> & {
-  services: PluginContext<NPCPluginRequiredServices>["services"] & {
-    quoteLifecycle: QuoteLifecycleService;
-  };
-};
+export type NPCPluginContext = PluginContext<typeof npcRequiredServices>;
 
 export type SyncTrigger = "manual" | "websocket" | "interval";
 
@@ -418,7 +396,7 @@ export class NPCAccountRuntime {
           await this.syncPaidQuotesOnce({
             mintOperationService: ctx.services.mintOperationService,
             mintService: ctx.services.mintService,
-            quoteLifecycle: ctx.services.quoteLifecycle,
+            quoteApi: ctx.services.quotes,
             trigger,
           });
         } while (this.hasPendingUpdate && !this.isShuttingDown);
@@ -443,11 +421,10 @@ export class NPCAccountRuntime {
   private async syncPaidQuotesOnce(options: {
     mintOperationService: NPCPluginContext["services"]["mintOperationService"];
     mintService: NPCPluginContext["services"]["mintService"];
-    quoteLifecycle: NPCPluginContext["services"]["quoteLifecycle"];
+    quoteApi: NPCPluginContext["services"]["quotes"];
     trigger: SyncTrigger;
   }): Promise<void> {
-    const { mintOperationService, mintService, quoteLifecycle, trigger } =
-      options;
+    const { mintOperationService, mintService, quoteApi, trigger } = options;
     const since = await this.sinceStore.get();
 
     this.logger?.debug?.(
@@ -597,11 +574,11 @@ export class NPCAccountRuntime {
           }
 
           try {
-            await quoteLifecycle.importMintQuote(
+            await quoteApi.mint.import({
               mintUrl,
-              "bolt11",
-              transformedQuote,
-            );
+              method: "bolt11",
+              quote: transformedQuote,
+            });
             const operation =
               existing?.state === "init"
                 ? await this.prepareExistingMintOperation(existing.id)

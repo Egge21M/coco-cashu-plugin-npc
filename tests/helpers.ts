@@ -70,13 +70,14 @@ export function createMockServices() {
         return { id: operationId, state: "finalized" };
       },
     },
-    quoteLifecycle: {
-      importMintQuote: async (
-        url: string,
-        _method: string,
-        quote: unknown,
-      ) => {
-        calls.importQuote.push({ url, quote });
+    quotes: {
+      mint: {
+        import: async (input: { mintUrl: string; quote: unknown }) => {
+          calls.importQuote.push({
+            url: input.mintUrl,
+            quote: input.quote,
+          });
+        },
       },
     },
     paymentRequestService: {},

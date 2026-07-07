@@ -12,7 +12,7 @@
         "tsdown": "^0.15.1",
       },
       "peerDependencies": {
-        "@cashu/coco-core": "^2.0.0-rc.0",
+        "@cashu/coco-core": "2.0.0-rc.1",
         "typescript": "^5.0.0",
       },
     },
@@ -30,7 +30,7 @@
 
     "@cashu/cashu-ts": ["@cashu/cashu-ts@3.2.2", "", { "dependencies": { "@noble/curves": "^2.0.1", "@noble/hashes": "^2.0.1", "@scure/bip32": "^2.0.1" } }, "sha512-FD3EBYQiDRhZFwCMXuhAGRAb279WpGEWePzRQk58GJSZy16OdcP3hrYmj7L9wWdETy2fQU0wn+bCuw2NAB6szQ=="],
 
-    "@cashu/coco-core": ["@cashu/coco-core@2.0.0-rc.0", "", { "dependencies": { "@cashu/cashu-ts": "4.5", "@noble/curves": "^2.0.1", "@noble/hashes": "^2.0.1", "@scure/bip32": "^2.0.1" }, "peerDependencies": { "typescript": "^5" } }, "sha512-opcfTq7evBGWE6QlTBuLPPWAkyR0wig0cueb6exwfgfb+f7mg2e0+kYJhBlmDbNUB5wPaedLid5cZIYLCbPRXw=="],
+    "@cashu/coco-core": ["@cashu/coco-core@2.0.0-rc.1", "", { "dependencies": { "@cashu/cashu-ts": "4.5", "@noble/curves": "^2.0.1", "@noble/hashes": "^2.0.1", "@scure/bip32": "^2.0.1" }, "peerDependencies": { "typescript": "^5" } }, "sha512-IBWqhvy2j47erhrtQLZQT4MKHMbEt0eQLg6lIljbwhFsCHMPiM8NCrA1jmmlLtrwvItJxFAmyoiSAphn85jZrA=="],
 
     "@emnapi/core": ["@emnapi/core@1.5.0", "", { "dependencies": { "@emnapi/wasi-threads": "1.1.0", "tslib": "^2.4.0" } }, "sha512-sbP8GzB1WDzacS8fgNPpHlp6C9VZe+SJP3F90W9rLemaQj2PzIuTEl1qDOYQf58YIpyjViI24y9aPWCjEzY2cg=="],
 
