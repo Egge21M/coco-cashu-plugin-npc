@@ -1,5 +1,9 @@
 import { getEncodedToken, type PaymentRequestService } from "coco-cashu-core";
 import { PaymentRequiredError, type NPCClient } from "npubcash-sdk";
+import type {
+  NPCPluginStatus,
+  NPCSyncReport,
+} from "./plugins/NPCPlugin";
 
 export type SetUsernameResult =
   | { success: true }
@@ -11,7 +15,9 @@ export type SetUsernameResult =
 export class PluginApi {
   private prService: PaymentRequestService;
   private client: NPCClient;
-  private syncQuotes: () => Promise<void>;
+  private syncQuotes: () => Promise<NPCSyncReport>;
+  private getPluginStatus: () => NPCPluginStatus;
+  private getPluginSyncReport: () => NPCSyncReport;
 
   /**
    * Creates a plugin API wrapper around payment and NPC clients.
@@ -21,11 +27,15 @@ export class PluginApi {
   constructor(
     prService: PaymentRequestService,
     client: NPCClient,
-    syncQuotes: () => Promise<void>,
+    syncQuotes: () => Promise<NPCSyncReport>,
+    getPluginStatus: () => NPCPluginStatus,
+    getPluginSyncReport: () => NPCSyncReport,
   ) {
     this.prService = prService;
     this.client = client;
     this.syncQuotes = syncQuotes;
+    this.getPluginStatus = getPluginStatus;
+    this.getPluginSyncReport = getPluginSyncReport;
   }
 
   /**
@@ -89,7 +99,39 @@ export class PluginApi {
   /**
    * Triggers a plugin sync cycle through the host integration.
    */
-  async sync(): Promise<void> {
-    await this.syncQuotes();
+  async sync(): Promise<NPCSyncReport> {
+    return this.syncQuotes();
+  }
+
+  /**
+   * Returns plugin lifecycle and sync policy status.
+   */
+  getStatus(): NPCPluginStatus {
+    return this.getPluginStatus();
+  }
+
+  /**
+   * Returns the report from the most recent plugin sync cycle.
+   */
+  getLastSyncReport(): NPCSyncReport {
+    return this.getPluginSyncReport();
+  }
+
+  /**
+   * Updates the NPC account's preferred server-side mint URL.
+   */
+  async setMintUrl(
+    mintUrl: string,
+  ): Promise<Awaited<ReturnType<NPCClient["settings"]["setMintUrl"]>>> {
+    return this.client.settings.setMintUrl(mintUrl);
+  }
+
+  /**
+   * Enables or disables server-side quote locking for the NPC account.
+   */
+  async setLockQuotes(
+    lock: boolean,
+  ): Promise<Awaited<ReturnType<NPCClient["settings"]["setLock"]>>> {
+    return this.client.settings.setLock(lock);
   }
 }

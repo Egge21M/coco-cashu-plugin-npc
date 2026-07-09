@@ -10,7 +10,9 @@ describe("NPCPlugin (manual)", () => {
       sinceStore,
     });
 
-    const { calls, ctx } = createMockContext();
+    const { calls, ctx } = createMockContext({
+      trustedMintUrls: ["https://mint.a"],
+    });
     plugin.onInit(ctx as unknown as Parameters<typeof plugin.onInit>[0]);
     plugin.onReady();
 
@@ -22,7 +24,7 @@ describe("NPCPlugin (manual)", () => {
 
     await plugin.sync();
 
-    expect(calls.addMintByUrl).toEqual(["https://mint.a"]);
+    expect(calls.addMintByUrl).toEqual([]);
     expect(calls.importQuote.length).toBe(1);
     expect(await sinceStore.get()).toBe(10);
   });
