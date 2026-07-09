@@ -253,6 +253,73 @@ describe("NPCPlugin sync mapping", () => {
     expect(report.blockedQuotes).toEqual([]);
   });
 
+  it("normalizes allow-listed quote mint URLs before comparing", async () => {
+    const calls = {
+      addMintByUrl: [] as string[],
+      importQuote: [] as { url: string; quote: unknown }[],
+      setSince: [] as number[],
+    };
+    const sinceStore = {
+      get: async () => 0,
+      set: async (since: number) => {
+        calls.setSince.push(since);
+      },
+    };
+
+    const plugin = new NPCPlugin(
+      "https://npc.example.com",
+      createMockSigner(),
+      {
+        sinceStore,
+        quoteMintPolicy: {
+          mode: "allow-list",
+          mintUrls: ["https://MINT.allowed:443/"],
+        },
+      },
+    );
+
+    const ctx = {
+      services: {
+        mintService: {
+          addMintByUrl: async (url: string) => {
+            calls.addMintByUrl.push(url);
+          },
+          isTrustedMint: async () => false,
+        },
+        mintOperationService: {
+          getOperationByQuote: async () => undefined,
+          importQuote: async (url: string, quote: unknown) => {
+            calls.importQuote.push({ url, quote });
+          },
+        },
+        paymentRequestService: {},
+      },
+      registerExtension: () => {},
+    };
+
+    plugin.onInit(ctx as Parameters<typeof plugin.onInit>[0]);
+    plugin.onReady();
+
+    (plugin as unknown as { npcClient: unknown }).npcClient = {
+      getQuotesSince: async () => [
+        {
+          mintUrl: "https://mint.allowed",
+          quoteId: "allowed",
+          paidAt: 100,
+          expiresAt: 200,
+          amount: 50,
+        },
+      ],
+    };
+
+    const report = await plugin.sync();
+
+    expect(calls.addMintByUrl).toEqual(["https://mint.allowed"]);
+    expect(calls.importQuote.length).toBe(1);
+    expect(calls.setSince).toEqual([100]);
+    expect(report.blockedQuotes).toEqual([]);
+  });
+
   it("preserves legacy auto-trust behavior when explicitly configured", async () => {
     const calls = {
       addMintByUrl: [] as { url: string; trusted?: boolean }[],

@@ -1,4 +1,9 @@
-import type { Logger, Plugin, PluginContext } from "coco-cashu-core";
+import {
+  normalizeMintUrl,
+  type Logger,
+  type Plugin,
+  type PluginContext,
+} from "coco-cashu-core";
 import { JWTAuthProvider, NPCClient } from "npubcash-sdk";
 import type { SinceStore } from "../sync/sinceStore";
 import { MemorySinceStore } from "../sync/sinceStore";
@@ -805,7 +810,7 @@ export class NPCPlugin implements Plugin<typeof requiredServices> {
       case "trusted-only":
         return this.isTrustedMint(mintService, mintUrl);
       case "allow-list":
-        if (!this.quoteMintPolicy.mintUrls.includes(mintUrl)) {
+        if (!this.isAllowListedMint(mintUrl)) {
           return false;
         }
         await this.cacheMintWithoutTrusting(mintService, mintUrl);
@@ -814,6 +819,16 @@ export class NPCPlugin implements Plugin<typeof requiredServices> {
         await mintService.addMintByUrl(mintUrl, { trusted: true });
         return true;
     }
+  }
+
+  private isAllowListedMint(mintUrl: string): boolean {
+    const normalizedMintUrl = normalizeMintUrl(mintUrl);
+    return this.quoteMintPolicy.mode === "allow-list"
+      ? this.quoteMintPolicy.mintUrls.some(
+          (allowedMintUrl) =>
+            normalizeMintUrl(allowedMintUrl) === normalizedMintUrl,
+        )
+      : false;
   }
 
   private async isTrustedMint(
