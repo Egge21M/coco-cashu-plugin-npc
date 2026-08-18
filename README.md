@@ -37,9 +37,9 @@ const plugin = new NPCPlugin({
   useWebsocket: true,
 });
 
-// core.use(plugin)
+// manager.use(plugin)
 
-const account = await core.extensions.npc.addAccount({
+const account = await manager.ext.npc.addAccount({
   id: "wallet-main",
   signer,
   sinceStore: new MemorySinceStore(0),
@@ -84,7 +84,7 @@ When the plugin is initialized it registers the root `npc` extension on the
 host. The root extension manages accounts:
 
 ```ts
-const npc = core.extensions.npc;
+const npc = manager.ext.npc;
 
 const account = await npc.addAccount({
   id: "wallet-main",

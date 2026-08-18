@@ -33,9 +33,9 @@ const plugin = new NPCPlugin({
   useWebsocket: true,
 });
 
-// core.use(plugin)
+// manager.use(plugin)
 
-const account = await core.extensions.npc.addAccount({
+const account = await manager.ext.npc.addAccount({
   id: "wallet-main",
   signer,
   sinceStore,
@@ -67,9 +67,9 @@ const plugin = new NPCPlugin({
 });
 
 // Register the plugin with the coco host first.
-// core.use(plugin)
+// manager.use(plugin)
 
-const account = await core.extensions.npc.addAccount({
+const account = await manager.ext.npc.addAccount({
   id: "wallet-main",
   signer,
   sinceStore,
