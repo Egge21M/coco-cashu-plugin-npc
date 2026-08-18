@@ -1,3 +1,6 @@
+import type { NPCAccountRuntime } from "../src/accounts/NPCAccountRuntime";
+import { NPCPlugin } from "../src/plugins/NPCPlugin";
+import { MemorySinceStore } from "../src/sync/sinceStore";
 import type { Signer } from "../src/types";
 
 /**
@@ -16,6 +19,32 @@ export function createMockServices() {
   const calls = {
     addMintByUrl: [] as string[],
     importQuote: [] as { url: string; quote: unknown }[],
+    prepareMintOperation: [] as { quoteId: string; amount: unknown }[],
+    executeMintOperation: [] as string[],
+  };
+  const eventHandlers = new Map<string, Set<(payload?: unknown) => void>>();
+  const eventBus = {
+    on: (event: string, handler: (payload?: unknown) => void) => {
+      let handlers = eventHandlers.get(event);
+      if (!handlers) {
+        handlers = new Set();
+        eventHandlers.set(event, handlers);
+      }
+      handlers.add(handler);
+
+      return () => {
+        handlers.delete(handler);
+        if (handlers.size === 0) {
+          eventHandlers.delete(event);
+        }
+      };
+    },
+    emit: async (event: string, payload?: unknown) => {
+      for (const handler of eventHandlers.get(event) ?? []) {
+        await handler(payload);
+      }
+    },
+    listenerCount: (event: string) => eventHandlers.get(event)?.size ?? 0,
   };
 
   const services = {
@@ -26,11 +55,33 @@ export function createMockServices() {
     },
     mintOperationService: {
       getOperationByQuote: async () => undefined,
-      importQuote: async (url: string, quote: unknown) => {
-        calls.importQuote.push({ url, quote });
+      prepare: async (
+        quoteRef: { quoteId: string },
+        amount: unknown,
+      ) => {
+        calls.prepareMintOperation.push({
+          quoteId: quoteRef.quoteId,
+          amount,
+        });
+        return { id: `op-${quoteRef.quoteId}`, state: "pending" };
+      },
+      execute: async (operationId: string) => {
+        calls.executeMintOperation.push(operationId);
+        return { id: operationId, state: "finalized" };
+      },
+    },
+    quotes: {
+      mint: {
+        import: async (input: { mintUrl: string; quote: unknown }) => {
+          calls.importQuote.push({
+            url: input.mintUrl,
+            quote: input.quote,
+          });
+        },
       },
     },
     paymentRequestService: {},
+    eventBus,
   };
 
   return { calls, services };
@@ -47,6 +98,57 @@ export function createMockContext() {
       services,
       registerExtension: () => {},
     },
+  };
+}
+
+export function getAccountRuntime(
+  plugin: NPCPlugin,
+  accountId = "account-1",
+): NPCAccountRuntime {
+  const accounts = (
+    plugin as unknown as {
+      accounts: Map<string, { runtime: NPCAccountRuntime }>;
+    }
+  ).accounts;
+  const runtime = accounts.get(accountId)?.runtime;
+  if (!runtime) {
+    throw new Error(`Missing runtime for ${accountId}`);
+  }
+  return runtime;
+}
+
+export async function createReadyAccount(options?: {
+  accountId?: string;
+  baseUrl?: string;
+  syncIntervalMs?: number;
+  useWebsocket?: boolean;
+  autoStart?: boolean;
+}) {
+  const accountId = options?.accountId ?? "account-1";
+  const sinceStore = new MemorySinceStore(0);
+  const plugin = new NPCPlugin();
+  const { calls, ctx } = createMockContext();
+
+  plugin.onInit(ctx as unknown as Parameters<typeof plugin.onInit>[0]);
+  const account = await plugin.addAccount({
+    id: accountId,
+    signer: createMockSigner(),
+    baseUrl: options?.baseUrl ?? "https://npc.example.com",
+    sinceStore,
+    syncIntervalMs: options?.syncIntervalMs,
+    useWebsocket: options?.useWebsocket,
+    autoStart: options?.autoStart,
+  });
+  plugin.onReady();
+
+  return {
+    account,
+    accountId,
+    calls,
+    ctx,
+    plugin,
+    runtime: getAccountRuntime(plugin, accountId),
+    sinceStore,
   };
 }
 

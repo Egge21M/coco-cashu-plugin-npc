@@ -1,0 +1,126 @@
+name: Publish Nightly RC to npm
+
+on:
+  push:
+    branches:
+      - nightly
+  workflow_dispatch:
+    inputs:
+      base-version:
+        description: Base semver version for the RC prerelease.
+        required: true
+        default: "3.0.0"
+      dist-tag:
+        description: npm dist-tag to publish under.
+        required: true
+        default: "nightly"
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: publish-nightly-rc
+  cancel-in-progress: false
+
+env:
+  BUN_VERSION: 1.2.18
+  NODE_VERSION: 24
+  RC_BASE_VERSION: ${{ github.event.inputs['base-version'] || '3.0.0' }}
+  NPM_DIST_TAG: ${{ github.event.inputs['dist-tag'] || 'nightly' }}
+
+jobs:
+  publish:
+    name: Publish nightly RC
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Setup Node for npm trusted publishing
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          registry-url: https://registry.npmjs.org
+
+      - name: Verify trusted publishing toolchain
+        run: |
+          node --version
+          npm --version
+          node - <<'NODE'
+          const { execFileSync } = require("node:child_process");
+          const npmVersion = execFileSync("npm", ["--version"], {
+            encoding: "utf8",
+          }).trim();
+          const [major, minor, patch] = npmVersion.split(".").map(Number);
+
+          if (
+            major < 11 ||
+            (major === 11 && minor < 5) ||
+            (major === 11 && minor === 5 && patch < 1)
+          ) {
+            throw new Error("npm trusted publishing requires npm 11.5.1 or newer");
+          }
+          NODE
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Test
+        run: bun test
+
+      - name: Set nightly RC version
+        run: |
+          node - <<'NODE'
+          const fs = require("node:fs");
+
+          const baseVersion = process.env.RC_BASE_VERSION;
+          if (!/^\d+\.\d+\.\d+$/.test(baseVersion)) {
+            throw new Error(`Invalid RC_BASE_VERSION: ${baseVersion}`);
+          }
+
+          const distTag = process.env.NPM_DIST_TAG;
+          if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(distTag)) {
+            throw new Error(`Invalid NPM_DIST_TAG: ${distTag}`);
+          }
+          if (distTag === "latest") {
+            throw new Error("Nightly RC workflow must not publish to the latest tag");
+          }
+
+          const now = new Date();
+          const date = [
+            now.getUTCFullYear(),
+            String(now.getUTCMonth() + 1).padStart(2, "0"),
+            String(now.getUTCDate()).padStart(2, "0"),
+          ].join("");
+          const runNumber = process.env.GITHUB_RUN_NUMBER;
+          const runAttempt = process.env.GITHUB_RUN_ATTEMPT;
+          const sha = process.env.GITHUB_SHA.slice(0, 7);
+          const version = `${baseVersion}-rc.${date}.${runNumber}.${runAttempt}.sha.${sha}`;
+
+          const packageJsonPath = "package.json";
+          const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
+          packageJson.version = version;
+          fs.writeFileSync(packageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`);
+
+          console.log(`Prepared ${packageJson.name}@${version}`);
+          NODE
+
+      - name: Build package
+        run: bun run build
+
+      - name: Inspect package contents
+        run: npm pack --dry-run
+
+      - name: Publish nightly RC to npm
+        run: npm publish --tag "$NPM_DIST_TAG"

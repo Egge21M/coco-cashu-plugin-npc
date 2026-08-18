@@ -1,6 +1,8 @@
 import { describe, it, expect } from "bun:test";
 import {
   NPCPlugin,
+  NPCPluginApi,
+  NPCAccountApi,
   MemorySinceStore,
   LocalStorageSinceStore,
   QUOTE_DEFAULTS,
@@ -9,10 +11,17 @@ import {
   createChildLogger,
 } from "../src";
 import type { SinceStore, Signer, NPCQuote, NPCPluginStatus } from "../src";
+import type {
+  AddNPCAccountOptions,
+  NPCAccountRecord,
+  NPCAccountStatus,
+} from "../src";
 
 describe("index barrel exports", () => {
   it("exports NPCPlugin and SinceStore implementations", () => {
     expect(typeof NPCPlugin).toBe("function");
+    expect(typeof NPCPluginApi).toBe("function");
+    expect(typeof NPCAccountApi).toBe("function");
     expect(typeof MemorySinceStore).toBe("function");
     expect(typeof LocalStorageSinceStore).toBe("function");
   });
@@ -67,10 +76,41 @@ describe("type exports (compile-time check)", () => {
     const status: NPCPluginStatus = {
       isInitialized: true,
       isReady: true,
-      isSyncing: false,
-      isWebSocketConnected: false,
+      accountCount: 1,
+      runningAccountIds: ["account-1"],
+      syncingAccountIds: [],
+      websocketConnectedAccountIds: [],
     };
     expect(status.isReady).toBe(true);
+  });
+
+  it("v3 account types are usable", () => {
+    const signer: Signer = {
+      sign: async (msg: string) => `signed:${msg}`,
+    };
+    const options: AddNPCAccountOptions = {
+      id: "account-1",
+      signer,
+      baseUrl: "https://npc.example.com",
+    };
+    const record: NPCAccountRecord = {
+      id: options.id,
+      baseUrl: options.baseUrl!,
+      autoStart: true,
+      createdAt: 1,
+      updatedAt: 2,
+    };
+    const status: NPCAccountStatus = {
+      id: options.id,
+      isReady: true,
+      isRunning: true,
+      isSyncing: false,
+      isWebSocketConnected: false,
+      isShutdown: false,
+    };
+
+    expect(record.id).toBe("account-1");
+    expect(status.isRunning).toBe(true);
   });
 });
 

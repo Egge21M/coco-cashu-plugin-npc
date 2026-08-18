@@ -1,7 +1,11 @@
 {
   "name": "coco-cashu-plugin-npc",
-  "version": "2.4.1",
-  "description": "NPubCash plugin for coco-cashu-core - bridges NPubCash server with coco-cashu wallet",
+  "version": "3.0.0",
+  "description": "NPubCash plugin for @cashu/coco-core - bridges NPubCash server with coco wallet",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Egge21M/coco-cashu-plugin-npc.git"
+  },
   "keywords": [
     "cashu",
     "npubcash",
@@ -34,10 +38,11 @@
     "npubcash-sdk": "^0.3.2"
   },
   "peerDependencies": {
-    "coco-cashu-core": "^1.1.2-rc.50",
+    "@cashu/coco-core": "^2.0.0",
     "typescript": "^5.0.0"
   },
   "devDependencies": {
+    "@cashu/cashu-ts": "^3.7.1",
     "@types/bun": "^1.1.0",
     "tsdown": "^0.15.1"
   },
