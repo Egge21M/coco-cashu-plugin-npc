@@ -7,6 +7,10 @@ available, and one host manager can manage multiple NPubCash accounts.
 This is a breaking change. The old constructor and root single-account methods
 were removed.
 
+v3 requires stable `@cashu/coco-core` v2. Upgrade the host application to
+`@cashu/coco-core@^2.0.0`; Coco release candidates and the legacy
+`coco-cashu-core` package are not supported.
+
 ## What Changed
 
 In v2, one NPC account was part of plugin construction:

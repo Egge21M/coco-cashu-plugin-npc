@@ -19,7 +19,7 @@ bun add coco-cashu-plugin-npc
 Install the required peer dependencies in the host app as well:
 
 ```bash
-bun add @cashu/coco-core typescript
+bun add @cashu/coco-core@^2.0.0 typescript
 ```
 
 This package uses `npubcash-sdk` internally for NPC API access and JWT auth.

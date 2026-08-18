@@ -691,7 +691,7 @@ export class NPCAccountRuntime {
 
     if (typeof service.prepareInitOperation !== "function") {
       throw new Error(
-        "Mint operation service cannot prepare existing init operations in this @cashu/coco-core RC",
+        "Mint operation service cannot prepare existing init operations with this @cashu/coco-core version",
       );
     }
 
