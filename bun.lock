@@ -8,6 +8,7 @@
         "npubcash-sdk": "^0.3.2",
       },
       "devDependencies": {
+        "@cashu/cashu-ts": "^3.7.1",
         "@types/bun": "^1.1.0",
         "tsdown": "^0.15.1",
       },
