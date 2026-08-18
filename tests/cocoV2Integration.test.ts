@@ -21,6 +21,12 @@ const QUOTE_ID = "npc-quote-1";
 
 const originalFetch = globalThis.fetch;
 
+interface MintOutput {
+  amount: number;
+  B_: string;
+  id: string;
+}
+
 afterEach(() => {
   globalThis.fetch = originalFetch;
 });
@@ -38,6 +44,40 @@ function createSigner(): Signer {
     pubkey: "0".repeat(64),
     id: "1".repeat(64),
     sig: "2".repeat(128),
+  });
+}
+
+function parseMintOutputs(body: unknown): MintOutput[] {
+  if (
+    typeof body !== "object" ||
+    body === null ||
+    !("outputs" in body) ||
+    !Array.isArray(body.outputs)
+  ) {
+    throw new Error("Invalid mint request: missing outputs array");
+  }
+
+  return body.outputs.map((output, index) => {
+    if (
+      typeof output !== "object" ||
+      output === null ||
+      !("amount" in output) ||
+      typeof output.amount !== "number" ||
+      !Number.isSafeInteger(output.amount) ||
+      output.amount <= 0 ||
+      !("B_" in output) ||
+      typeof output.B_ !== "string" ||
+      !("id" in output) ||
+      typeof output.id !== "string"
+    ) {
+      throw new Error(`Invalid mint request output at index ${index}`);
+    }
+
+    return {
+      amount: output.amount,
+      B_: output.B_,
+      id: output.id,
+    };
   });
 }
 
@@ -115,14 +155,10 @@ function createTestMintFetch(): typeof fetch {
     }
 
     if (method === "POST" && url.pathname === "/v1/mint/bolt11") {
-      const body = request
+      const body: unknown = request
         ? await request.json()
         : JSON.parse(String(init?.body));
-      const outputs = (
-        body as {
-          outputs: Array<{ amount: number; B_: string; id: string }>;
-        }
-      ).outputs;
+      const outputs = parseMintOutputs(body);
       const signatures = outputs.map((output) => {
         const privateKey = keyset.privKeys[String(output.amount)];
         if (!privateKey) {
@@ -151,20 +187,39 @@ function createTestMintFetch(): typeof fetch {
   };
 }
 
-function installExternalFetch(): void {
+function installExternalFetch(): {
+  authRequests: number;
+  quoteRequests: number;
+} {
   const mintFetch = createTestMintFetch();
+  const npcRequests = {
+    authRequests: 0,
+    quoteRequests: 0,
+  };
 
   globalThis.fetch = async (input, init) => {
+    const request = input instanceof Request ? input : undefined;
     const url = new URL(
-      input instanceof Request ? input.url : input.toString(),
+      request?.url ?? input.toString(),
     );
+    const headers = new Headers(request?.headers ?? init?.headers);
 
     if (url.origin === NPC_BASE_URL) {
       if (url.pathname === "/api/v2/auth/nip98") {
+        if (!headers.get("authorization")?.startsWith("Nostr ")) {
+          return jsonResponse({ message: "Unauthorized" }, { status: 401 });
+        }
+
+        npcRequests.authRequests++;
         return jsonResponse({ data: { token: "test-token" } });
       }
 
       if (url.pathname === "/api/v2/wallet/quotes") {
+        if (headers.get("authorization") !== "Bearer test-token") {
+          return jsonResponse({ message: "Unauthorized" }, { status: 401 });
+        }
+
+        npcRequests.quoteRequests++;
         return jsonResponse({
           data: {
             quotes: [
@@ -189,12 +244,14 @@ function installExternalFetch(): void {
 
     throw new Error(`Unexpected external request: ${url}`);
   };
+
+  return npcRequests;
 }
 
 async function createIntegrationContext(
   repo = new MemoryRepositories(),
 ) {
-  installExternalFetch();
+  const npcRequests = installExternalFetch();
 
   const plugin = new NPCPlugin();
   const manager = await initializeCoco({
@@ -219,12 +276,12 @@ async function createIntegrationContext(
     sinceStore,
   });
 
-  return { account, manager, sinceStore };
+  return { account, manager, npcRequests, sinceStore };
 }
 
 describe("Coco v2 integration", () => {
   it("imports and redeems an NPC quote through a real Coco manager", async () => {
-    const { account, manager, sinceStore } =
+    const { account, manager, npcRequests, sinceStore } =
       await createIntegrationContext();
 
     try {
@@ -245,6 +302,10 @@ describe("Coco v2 integration", () => {
         "finalized",
       ]);
       expect(balances[MINT_URL]?.spendable.toNumberUnsafe()).toBe(32);
+      expect(npcRequests).toEqual({
+        authRequests: 1,
+        quoteRequests: 1,
+      });
       expect(await sinceStore.get()).toBe(1_000);
     } finally {
       await manager.dispose();
